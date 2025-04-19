@@ -129,6 +129,39 @@ fig.update_layout(
 
 st.plotly_chart(fig)
 
+
+# --- Mollweide projection plot ---
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
+st.subheader("🌍 Mollweide Projection of Speaker Positions")
+
+# Extract azimuth and elevation
+azimuths = [spk["Azimuth"] for spk in spherical_coords if not spk["IsImaginary"]]
+elevations = [spk["Elevation"] for spk in spherical_coords if not spk["IsImaginary"]]
+labels = [str(spk["Channel"]) for spk in spherical_coords if not spk["IsImaginary"]]
+
+# Convert degrees to radians
+azimuths_rad = np.radians(azimuths)
+elevations_rad = np.radians(elevations)
+
+fig2, ax = plt.subplots(figsize=(10, 5), subplot_kw={'projection': 'mollweide'})
+ax.grid(True, linestyle='--', linewidth=0.5)
+
+# Plot points
+ax.scatter(azimuths_rad, elevations_rad, color='yellow', s=20)
+
+# Add labels with larger font
+for x, y, label in zip(azimuths_rad, elevations_rad, labels):
+    ax.text(x, y, label, fontsize=12, fontweight='bold', ha='center', va='center', color='black')
+
+# Ticks and formatting
+ax.set_xticklabels(['150°W','120°W','90°W','60°W','30°W','0°','30°E','60°E','90°E','120°E','150°E'])
+ax.set_title("Mollweide Projection (Azimuth vs. Elevation)", fontsize=12, pad=20)
+
+st.pyplot(fig2)
+
+
 # --- Display speaker counts per ring ---
 st.subheader("🔊 Speakers per Ring")
 
