@@ -1,8 +1,8 @@
-# 🎈 Blank app template
+# 🌐 Ambisonic Dome Loudspeaker Layout Generator
 
-A simple Streamlit app template for you to modify!
+A simple Streamlit app to generate a dome loudspeaker layout usable in the IEM AllRADecoder plugin.
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://dome-loudspeaker-layout-generator.streamlit.app/)
 
 ### How to run it on your own machine
 

@@ -3,36 +3,64 @@ import numpy as np
 import plotly.graph_objects as go
 import json
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 # --- Parameter controls at the top ---
-st.title("🎧 Loudspeaker Layout Generator")
+st.title("🌐 Ambisonic Dome Loudspeaker Layout Generator")
 
 col1, col2 = st.columns(2)
 with col1:
-    N_points = st.number_input("Total Points", min_value=1, max_value=1000, value=23, step=1)
+    N_points = st.number_input("Numer of total Speakers", min_value=1, max_value=1000, value=23, step=1)
 with col2:
-    N_rings = st.number_input("Number of Rings", min_value=1, max_value=20, value=4, step=1)
+    N_rings = st.number_input("Number of Elevation Rings", min_value=1, max_value=20, value=4, step=1)
     Voice_of_God = st.checkbox("Include Voice of God", value=True)
-    Ring_below_horizon = st.checkbox("Include Ring Below Horizon", value=False)
-    
-# --- Core logic ---
-r = 1  # Radius of the sphere
+    Ring_below_horizon = st.checkbox("Add Ring Below Horizon", value=False)
 
-theta_vals = np.linspace(np.pi/2, 0, N_rings)
+# --- Ring configuration ---
+st.subheader("🔧 Ring Configuration")
+
+# Calculate default theta (elevation) values
+default_theta_vals = np.linspace(np.pi/2, 0, N_rings)
 
 if Ring_below_horizon:
-    theta_below = np.pi - theta_vals[1]
-    theta_vals = np.insert(theta_vals, 0, theta_below)
+    theta_below = np.pi - default_theta_vals[1]
+    default_theta_vals = np.insert(default_theta_vals, 0, theta_below)
 
-ring_weights = np.abs(np.sin(theta_vals))
-ring_point_counts = np.round(ring_weights / ring_weights.sum() * N_points).astype(int)
+# Normalize weights by sin(theta)
+ring_weights = np.abs(np.sin(default_theta_vals))
+default_ring_counts = np.round(ring_weights / ring_weights.sum() * N_points).astype(int)
 
 if Voice_of_God:
-    ring_point_counts[-1] = 1
+    default_ring_counts[-1] = 1
 
-diff = N_points - ring_point_counts.sum()
-ring_point_counts[0] += diff
+diff = N_points - default_ring_counts.sum()
+default_ring_counts[0] += diff
 
+ring_point_counts = []
+theta_vals = []
+
+for i in range(len(default_theta_vals)):
+    with st.expander(f"Ring {i+1} Settings", expanded=False):
+        elev_deg = round(90 - np.degrees(default_theta_vals[i]), 2)
+        elev_input = st.number_input(
+            f"Elevation of Ring {i+1} (degrees)",
+            min_value=-90.0, max_value=90.0,
+            value=elev_deg,
+            step=1.0, key=f"elev_{i}"
+        )
+        theta = np.radians(90 - elev_input)
+        theta_vals.append(theta)
+
+        count_input = st.number_input(
+            f"Speakers in Ring {i+1}",
+            min_value=0,
+            value=int(default_ring_counts[i]),
+            step=1, key=f"count_{i}"
+        )
+        ring_point_counts.append(count_input)
+
+# --- Core logic ---
+r = 1  # Radius of the sphere
 spherical_coords = []
 points = []
 
@@ -91,6 +119,8 @@ ys = r * np.sin(u) * np.sin(v)
 zs = r * np.cos(u)
 
 # --- Plotting ---
+st.subheader("🌐 3D view")
+
 fig = go.Figure()
 
 fig.add_trace(go.Scatter3d(
@@ -129,38 +159,27 @@ fig.update_layout(
 
 st.plotly_chart(fig)
 
-
 # --- Mollweide projection plot ---
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
-
 st.subheader("🌍 Mollweide Projection of Speaker Positions")
 
-# Extract azimuth and elevation
 azimuths = [spk["Azimuth"] for spk in spherical_coords if not spk["IsImaginary"]]
 elevations = [spk["Elevation"] for spk in spherical_coords if not spk["IsImaginary"]]
 labels = [str(spk["Channel"]) for spk in spherical_coords if not spk["IsImaginary"]]
 
-# Convert degrees to radians
 azimuths_rad = np.radians(azimuths)
 elevations_rad = np.radians(elevations)
 
 fig2, ax = plt.subplots(figsize=(10, 5), subplot_kw={'projection': 'mollweide'})
 ax.grid(True, linestyle='--', linewidth=0.5)
-
-# Plot points
 ax.scatter(azimuths_rad, elevations_rad, color='yellow', s=20)
 
-# Add labels with larger font
 for x, y, label in zip(azimuths_rad, elevations_rad, labels):
     ax.text(x, y, label, fontsize=12, fontweight='bold', ha='center', va='center', color='black')
 
-# Ticks and formatting
 ax.set_xticklabels(['150°W','120°W','90°W','60°W','30°W','0°','30°E','60°E','90°E','120°E','150°E'])
 ax.set_title("Mollweide Projection (Azimuth vs. Elevation)", fontsize=12, pad=20)
 
 st.pyplot(fig2)
-
 
 # --- Display speaker counts per ring ---
 st.subheader("🔊 Speakers per Ring")
@@ -172,7 +191,6 @@ for i, (theta, count) in enumerate(zip(theta_vals, ring_point_counts)):
 
 for info in ring_info:
     st.markdown(f"- {info}")
-
 
 # --- JSON download ---
 json_data = {
@@ -186,13 +204,19 @@ json_data = {
 
 json_str = json.dumps(json_data, indent=2)
 json_bytes = json_str.encode("utf-8")
-
-# Filename with parameters
 filename = f"AllRAD_speakerLayout_N{N_points}_R{N_rings}_VoG{int(Voice_of_God)}_RBH{int(Ring_below_horizon)}.json"
 
+st.markdown("###")  # Adds vertical space before the download button
+
 st.download_button(
-    label="📥 Download IEM AllRAD Layout JSON",
+    label="⬇️ Download IEM AllRAD Layout JSON",
     data=json_bytes,
     file_name=filename,
     mime="application/json"
 )
+
+
+st.markdown("* IMPORT the `.json` file in the [IEM AllRADecoder plugin](https://plugins.iem.at), and press `Calculate Decoder`.")
+
+st.markdown("---")
+st.markdown("© 2025 Matthias Kronlachner")
