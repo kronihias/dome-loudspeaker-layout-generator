@@ -192,6 +192,27 @@ for i, (theta, count) in enumerate(zip(theta_vals, ring_point_counts)):
 for info in ring_info:
     st.markdown(f"- {info}")
 
+# --- Expandable section: Loudspeaker Coordinates ---
+with st.expander("📍 Show Loudspeaker Coordinates (Channel, Azimuth, Elevation, x, y, z)"):
+    st.write("All angles are in degrees. Coordinates are in a unit sphere (radius = 1.0).")
+
+    import pandas as pd
+    coord_table = pd.DataFrame([
+        {
+            "Channel": spk["Channel"],
+            "Azimuth (°)": spk["Azimuth"],
+            "Elevation (°)": spk["Elevation"],
+            "x": round(np.cos(np.radians(spk["Azimuth"])) * np.cos(np.radians(spk["Elevation"])), 6),
+            "y": round(np.sin(np.radians(spk["Azimuth"])) * np.cos(np.radians(spk["Elevation"])), 6),
+            "z": round(np.sin(np.radians(spk["Elevation"])), 6),
+            "Imaginary": spk["IsImaginary"]
+        }
+        for spk in spherical_coords
+    ])
+
+    st.dataframe(coord_table, use_container_width=True, hide_index=True)
+
+
 # --- JSON download ---
 json_data = {
     "Name": "All-Round Ambisonic decoder loudspeaker layout, importable in IEM AllRAD Decoder Plugin.",
