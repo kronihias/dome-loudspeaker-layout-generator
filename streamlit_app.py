@@ -38,15 +38,19 @@ default_ring_counts[0] += diff
 
 ring_point_counts = []
 theta_vals = []
+azimuth_offsets = []
+
+stagger_offset = 0 if Ring_below_horizon else 1
 
 for i in range(len(default_theta_vals)):
     with st.expander(f"Ring {i+1} Settings", expanded=False):
         elev_deg = round(90 - np.degrees(default_theta_vals[i]), 2)
+        cfg_key = f"N{N_points}_R{N_rings}_VoG{int(Voice_of_God)}_RBH{int(Ring_below_horizon)}"
         elev_input = st.number_input(
             f"Elevation of Ring {i+1} (degrees)",
             min_value=-90.0, max_value=90.0,
             value=elev_deg,
-            step=1.0, key=f"elev_{i}"
+            step=1.0, key=f"elev_{i}_{cfg_key}"
         )
         theta = np.radians(90 - elev_input)
         theta_vals.append(theta)
@@ -55,26 +59,29 @@ for i in range(len(default_theta_vals)):
             f"Speakers in Ring {i+1}",
             min_value=0,
             value=int(default_ring_counts[i]),
-            step=1, key=f"count_{i}"
+            step=1, key=f"count_{i}_{cfg_key}"
         )
         ring_point_counts.append(count_input)
+
+        default_az_offset = round(180.0 / count_input, 4) if (i % 2 == stagger_offset and count_input > 0) else 0.0
+        az_offset_input = st.number_input(
+            f"Azimuth Offset of Ring {i+1} (degrees)",
+            min_value=-180.0, max_value=180.0,
+            value=default_az_offset,
+            step=1.0, key=f"az_offset_{i}_{cfg_key}"
+        )
+        azimuth_offsets.append(az_offset_input)
 
 # --- Core logic ---
 r = 1  # Radius of the sphere
 spherical_coords = []
 points = []
 
-for i, (theta, M) in enumerate(zip(theta_vals, ring_point_counts)):
+for i, (theta, M, az_offset) in enumerate(zip(theta_vals, ring_point_counts, azimuth_offsets)):
     if M == 0:
         continue
 
-    stagger_offset = 0 if Ring_below_horizon else 1
-
-    if i % 2 == stagger_offset:
-        phi_offset = (2 * np.pi) / M / 2
-    else:
-        phi_offset = 0
-
+    phi_offset = np.radians(az_offset)
     phi_vals = np.linspace(0, 2 * np.pi, M, endpoint=False) + phi_offset
     for phi in phi_vals:
         x = r * np.sin(theta) * np.cos(phi)
