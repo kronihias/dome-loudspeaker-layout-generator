@@ -206,9 +206,9 @@ fig.update_layout(
     scene=dict(
         aspectmode='manual',
         aspectratio=dict(x=1, y=1, z=1),
-        xaxis=dict(range=[-scale, scale], title='X (front)'),
-        yaxis=dict(range=[-scale, scale], title='Y (left)'),
-        zaxis=dict(range=[-scale, scale], title='Z (up)')
+        xaxis=dict(range=[-scale, scale], title='X (m)  − back / + front'),
+        yaxis=dict(range=[-scale, scale], title='Y (m)  − right / + left'),
+        zaxis=dict(range=[-scale, scale], title='Z (m)')
     ),
     margin=dict(l=0, r=0, b=0, t=0),
     title="Points Distributed on Full Sphere with Indices",
@@ -409,9 +409,9 @@ with st.expander("🏗️ Truss Planner", expanded=False):
     fig_truss.update_layout(
         scene=dict(
             aspectmode='manual', aspectratio=dict(x=1, y=1, z=1),
-            xaxis=dict(range=[-scale_truss, scale_truss], title='X (front)'),
-            yaxis=dict(range=[-scale_truss, scale_truss], title='Y (left)'),
-            zaxis=dict(range=[-scale_truss, scale_truss], title='Z (up)')
+            xaxis=dict(range=[-scale_truss, scale_truss], title='X (m)  − back / + front'),
+            yaxis=dict(range=[-scale_truss, scale_truss], title='Y (m)  − right / + left'),
+            zaxis=dict(range=[-scale_truss, scale_truss], title='Z (m)')
         ),
         margin=dict(l=0, r=0, b=0, t=30),
         title="Speaker Projection: Sphere → Truss",
@@ -630,8 +630,8 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
     fig_wall.update_layout(
         scene=dict(
             aspectmode='data',
-            xaxis=dict(title='X (m)  ← Back | Front →'),
-            yaxis=dict(title='Y (m)  ← Right | Left →'),
+            xaxis=dict(title='X (m)  − back / + front'),
+            yaxis=dict(title='Y (m)  − right / + left'),
             zaxis=dict(title='Z (m)'),
         ),
         margin=dict(l=0, r=0, b=0, t=30),
