@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import json
 import base64
+import re
 from datetime import datetime
 import matplotlib.pyplot as plt
 
@@ -23,8 +24,10 @@ if _url_cfg is not None:
         st.session_state["w_n_rings"]        = int(_url_cfg.get("rings", 4))
         st.session_state["w_vog"]            = bool(_url_cfg.get("vog", 1))
         st.session_state["w_rbh"]            = bool(_url_cfg.get("rbh", 0))
-        st.session_state["w_dome_radius"]    = float(_url_cfg.get("r", 3.0))
-        st.session_state["w_listener_height"]= float(_url_cfg.get("lh", 1.3))
+        st.session_state["w_dome_radius"]      = float(_url_cfg.get("r", 3.0))
+        st.session_state["w_listener_height"]  = float(_url_cfg.get("lh", 1.3))
+        st.session_state["w_layout_title"]     = str(_url_cfg.get("title", ""))
+        st.session_state["w_layout_description"] = str(_url_cfg.get("desc", ""))
 
         _n  = st.session_state["w_n_points"]
         _nr = st.session_state["w_n_rings"]
@@ -48,6 +51,15 @@ st.markdown(
     "Configure elevation rings, visualise the 3D layout and Mollweide projection, "
     "plan speaker placement on a rectangular **truss**, or project positions onto **room walls and ceiling**. "
     "Export the layout as an IEM AllRADecoder-compatible JSON file or share the configuration via URL."
+)
+
+layout_title = st.text_input(
+    "Layout Title", value="", placeholder="e.g. Concert Hall Dome — 24 ch",
+    key="w_layout_title"
+)
+layout_description = st.text_area(
+    "Description", value="", placeholder="Optional notes about this configuration...",
+    key="w_layout_description", height=80
 )
 
 col1, col2, col3 = st.columns(3)
@@ -656,18 +668,20 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
 
 
 # --- JSON download ---
+_safe_title = re.sub(r'[^\w\-]', '_', layout_title)[:40] if layout_title else ""
 json_data = {
-    "Name": "All-Round Ambisonic decoder loudspeaker layout, importable in IEM AllRAD Decoder Plugin.",
-    "Description": f"This configuration file was created with the Automatic Speaker Layout Generator from Matthias Kronlachner. {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+    "Name": layout_title or "All-Round Ambisonic decoder loudspeaker layout, importable in IEM AllRAD Decoder Plugin.",
+    "Description": (layout_description + " — " if layout_description else "") +
+                   f"Created with the Dome Loudspeaker Layout Generator by Matthias Kronlachner. {datetime.now().strftime('%Y-%m-%d %H:%M')}",
     "LoudspeakerLayout": {
-        "Name": "Generated loudspeaker layout",
+        "Name": layout_title or "Generated loudspeaker layout",
         "Loudspeakers": spherical_coords
     }
 }
 
 json_str = json.dumps(json_data, indent=2)
 json_bytes = json_str.encode("utf-8")
-filename = f"AllRAD_speakerLayout_N{N_points}_R{N_rings}_VoG{int(Voice_of_God)}_RBH{int(Ring_below_horizon)}.json"
+filename = f"{_safe_title + '_' if _safe_title else ''}AllRAD_speakerLayout_N{N_points}_R{N_rings}_VoG{int(Voice_of_God)}_RBH{int(Ring_below_horizon)}.json"
 
 st.markdown("###")  # Adds vertical space before the download button
 
@@ -701,6 +715,8 @@ if st.button("🔗 Generate Share Link"):
         "rbh":        int(Ring_below_horizon),
         "r":          dome_radius,
         "lh":         listener_height,
+        "title":      layout_title,
+        "desc":       layout_description,
         "rings_data": _rings_data,
     }
     _encoded = base64.b64encode(json.dumps(_cfg).encode()).decode()
