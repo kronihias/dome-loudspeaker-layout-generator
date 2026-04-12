@@ -410,13 +410,15 @@ with st.expander("🏗️ Truss Planner", expanded=False):
         ))
 
     max_half = max((max(tw, td) / 2 for tw, td in zip(truss_widths, truss_depths) if max(tw, td) > 0), default=1.0)
-    scale_truss = max(r * 1.1, max_half + 0.1)
+    scale_truss_xy = max(r * 1.1, max_half + 0.1)
+    max_th = max((abs(th) for th in truss_heights), default=0.0)
+    scale_truss_z = max(r * 1.1, max_th + 0.1)
     fig_truss.update_layout(
         scene=dict(
-            aspectmode='manual', aspectratio=dict(x=1, y=1, z=1),
-            xaxis=dict(range=[-scale_truss, scale_truss], title='X (m)  − back / + front'),
-            yaxis=dict(range=[-scale_truss, scale_truss], title='Y (m)  − right / + left'),
-            zaxis=dict(range=[-scale_truss, scale_truss], title='Z (m)')
+            aspectmode='manual', aspectratio=dict(x=1, y=1, z=scale_truss_z / scale_truss_xy),
+            xaxis=dict(range=[-scale_truss_xy, scale_truss_xy], title='X (m)  − back / + front'),
+            yaxis=dict(range=[-scale_truss_xy, scale_truss_xy], title='Y (m)  − right / + left'),
+            zaxis=dict(range=[-scale_truss_xy, scale_truss_z], title='Z (m)')
         ),
         margin=dict(l=0, r=0, b=0, t=30),
         title="Speaker Projection: Sphere → Truss",
@@ -440,7 +442,7 @@ with st.expander("🏗️ Truss Planner", expanded=False):
     elev_df = pd.DataFrame(elev_rows)
 
     def highlight_large_delta(row):
-        color = 'background-color: #ffcccc' if abs(row["Δ Elev (°)"]) > 5 else ''
+        color = 'background-color: #c0392b; color: #ffffff' if abs(row["Δ Elev (°)"]) > 5 else ''
         return [color] * len(row)
 
     st.subheader("🏗️ Truss Projection")
