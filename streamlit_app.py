@@ -111,7 +111,12 @@ for _row_start in range(0, _n_rings_total, 5):
                     step=1, key=f"count_{i}_{cfg_key}"
                 )
 
-                default_az_offset = round(180.0 / count_input, 4) if (i % 2 == stagger_offset and count_input > 0) else 0.0
+                if elev_input >= 90.0:
+                    default_az_offset = 0.0
+                elif i % 2 == stagger_offset and count_input > 0:
+                    default_az_offset = round(180.0 / count_input, 4)
+                else:
+                    default_az_offset = 0.0
                 az_offset_input = st.number_input(
                     "Azimuth Offset (°)", min_value=-180.0, max_value=180.0,
                     value=default_az_offset, step=1.0, key=f"az_offset_{i}_{cfg_key}"
@@ -336,7 +341,7 @@ with st.expander("🏗️ Truss Planner", expanded=False):
                 px, py, pz = 0.0, 0.0, float(th)
                 proj_elev = 90.0
             else:
-                t = min(half_w / max(abs(cp), eps), half_d / max(abs(sp), eps))
+                t = min(half_d / max(abs(cp), eps), half_w / max(abs(sp), eps))
                 px, py, pz = float(t * cp), float(t * sp), float(th)
                 proj_elev = float(np.degrees(np.arctan2(th, t)))
 
@@ -379,8 +384,8 @@ with st.expander("🏗️ Truss Planner", expanded=False):
         ))
 
         fig_truss.add_trace(go.Scatter3d(
-            x=[-W2,  W2,  W2, -W2, -W2],
-            y=[-D2, -D2,  D2,  D2, -D2],
+            x=[-D2,  D2,  D2, -D2, -D2],
+            y=[-W2, -W2,  W2,  W2, -W2],
             z=[ th,  th,  th,  th,  th],
             mode='lines', line=dict(color=color, width=4),
             name=f"Ring {i+1} Truss"
