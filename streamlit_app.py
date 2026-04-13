@@ -78,7 +78,14 @@ with col3:
 st.subheader("🔧 Ring Configuration")
 
 # Calculate default theta (elevation) values
-default_theta_vals = np.linspace(np.pi/2, 0, N_rings)
+# With VoG: last ring lands at 90° (zenith) and gets count=1 (the VoG speaker).
+# Without VoG: use step = 90°/N_rings so rings space evenly below zenith
+#   e.g. 3 rings → 0°, 30°, 60° instead of 0°, 45°, 90°
+if Voice_of_God:
+    default_theta_vals = np.linspace(np.pi/2, 0, N_rings)
+else:
+    step = (np.pi / 2) / N_rings
+    default_theta_vals = np.linspace(np.pi/2, step, N_rings)
 
 if Ring_below_horizon:
     theta_below = np.pi - default_theta_vals[1]
@@ -301,7 +308,7 @@ with st.expander("🏗️ Truss Planner", expanded=False):
                         value=default_w, step=float(r * 0.1), key=f"tw_{i}_{cfg_key}")
                     td = st.number_input("Depth (m)", min_value=0.0, max_value=float(r * 20),
                         value=default_w, step=float(r * 0.1), key=f"td_{i}_{cfg_key}")
-                    th = st.number_input("Height (m)", min_value=float(-r * 2), max_value=float(r * 2),
+                    th = st.number_input("Height (m)", min_value=float(-r * 4), max_value=float(r * 4),
                         value=default_h, step=float(r * 0.05), key=f"th_{i}_{cfg_key}")
                     truss_widths.append(tw)
                     truss_depths.append(td)
