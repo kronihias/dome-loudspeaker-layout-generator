@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import json
 import base64
 import re
+import hashlib
 from datetime import datetime
 import matplotlib.pyplot as plt
 
@@ -43,6 +44,14 @@ if _url_cfg is not None:
             st.session_state[f"tw_{_i}_{_ck}"]        = float(_ring.get("tw", 0))
             st.session_state[f"td_{_i}_{_ck}"]        = float(_ring.get("td", 0))
             st.session_state[f"th_{_i}_{_ck}"]        = float(_ring.get("th", 0))
+
+        # Store per-speaker offsets; applied to the editor on first render.
+        st.session_state["_pending_spk_offsets"] = {
+            int(o["ch"]): (float(o.get("daz", 0.0)), float(o.get("del", 0.0)))
+            for o in _url_cfg.get("spk_offsets", [])
+        }
+        st.session_state["truss_expander"] = bool(_url_cfg.get("truss_exp", False))
+        st.session_state["wall_expander"]  = bool(_url_cfg.get("wall_exp",  False))
 
 # --- Parameter controls at the top ---
 st.title("🌐 Ambisonic Dome Loudspeaker Layout Generator")
@@ -191,6 +200,80 @@ spherical_coords.append({
     "Gain": 1.0
 })
 
+# --- Per-speaker position editor ---
+# Build a config hash that changes whenever any ring parameter changes so that
+# manual edits are automatically discarded when the ring layout is reconfigured.
+import pandas as pd
+_spk_config_str = cfg_key + "|" + "|".join(
+    f"{round(float(t),5)},{c},{round(float(a),4)}"
+    for t, c, a in zip(theta_vals, ring_point_counts, azimuth_offsets)
+)
+_editor_key = "spk_editor_" + hashlib.md5(_spk_config_str.encode()).hexdigest()[:12]
+
+# Maintain our own offset state so edits survive any widget interaction on the page
+# (st.data_editor's internal session state can be silently re-initialized by Streamlit).
+_offsets_state_key = f"_spk_offsets_{_editor_key}"
+if _offsets_state_key not in st.session_state:
+    # Ring config changed or first load — consume pending URL offsets if present.
+    st.session_state[_offsets_state_key] = st.session_state.pop("_pending_spk_offsets", {})
+_stored_offsets = st.session_state[_offsets_state_key]  # {channel: (daz, del)}
+
+# Pre-seed the dataframe from our stored state so the editor always shows current values
+# even if its own internal state was reset.
+_auto_spk_df = pd.DataFrame([
+    {"Ch": s["Channel"], "Az (°)": s["Azimuth"], "El (°)": s["Elevation"],
+     "ΔAz (°)": _stored_offsets.get(s["Channel"], (0.0, 0.0))[0],
+     "ΔEl (°)": _stored_offsets.get(s["Channel"], (0.0, 0.0))[1]}
+    for s in spherical_coords if not s["IsImaginary"]
+])
+
+with st.expander("✏️ Speaker Position Offsets", expanded=False):
+    st.caption("ΔAz and ΔEl are added to each speaker's auto-computed position. Resets when ring configuration changes.")
+    _edited_spk_df = st.data_editor(
+        _auto_spk_df,
+        key=_editor_key,
+        column_config={
+            "Ch":     st.column_config.NumberColumn(disabled=True),
+            "Az (°)": st.column_config.NumberColumn(disabled=True, format="%.2f"),
+            "El (°)": st.column_config.NumberColumn(disabled=True, format="%.2f"),
+            "ΔAz (°)": st.column_config.NumberColumn(
+                min_value=-180.0, max_value=180.0, step=0.1),
+            "ΔEl (°)": st.column_config.NumberColumn(
+                min_value=-90.0, max_value=90.0, step=0.1),
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
+
+# Persist offsets back into our own state after every render.
+st.session_state[_offsets_state_key] = {
+    int(_row["Ch"]): (float(_row["ΔAz (°)"]), float(_row["ΔEl (°)"]))
+    for _, _row in _edited_spk_df.iterrows()
+}
+
+# Rebuild spherical_coords and points applying the delta offsets.
+# _edited_positions maps channel -> (final_az, final_el) for truss/wall planners.
+_edited_positions = {}
+_final_real = []
+_final_pts = []
+for _, _row in _edited_spk_df.iterrows():
+    _ch = int(_row["Ch"])
+    _az = float(_row["Az (°)"]) + float(_row["ΔAz (°)"])
+    _el = float(_row["El (°)"]) + float(_row["ΔEl (°)"])
+    _az = max(-180.0, min(180.0, _az))
+    _el = max(-90.0, min(90.0, _el))
+    _edited_positions[_ch] = (_az, _el)
+    _th = np.radians(90 - _el)
+    _ph = np.radians(_az)
+    _final_pts.append((r * np.sin(_th) * np.cos(_ph),
+                       r * np.sin(_th) * np.sin(_ph),
+                       r * np.cos(_th)))
+    _final_real.append({"Azimuth": round(_az, 2), "Elevation": round(_el, 2),
+                        "Radius": 1.0, "IsImaginary": False, "Channel": _ch, "Gain": 1.0})
+
+spherical_coords = _final_real + [s for s in spherical_coords if s["IsImaginary"]]
+points = np.array(_final_pts) if _final_pts else np.zeros((0, 3))
+
 indices = [str(i+1) for i in range(len(points))]
 
 # Sphere mesh
@@ -286,7 +369,7 @@ with st.expander("📍 Show Loudspeaker Coordinates (Channel, Azimuth, Elevation
     st.dataframe(coord_table, use_container_width=True, hide_index=True)
 
 
-with st.expander("🏗️ Truss Planner", expanded=False):
+with st.expander("🏗️ Truss Planner", expanded=st.session_state.get("truss_expander", False), key="truss_expander"):
     # --- Truss Configuration ---
     st.subheader("🏗️ Truss Configuration")
     truss_widths = []
@@ -303,12 +386,12 @@ with st.expander("🏗️ Truss Planner", expanded=False):
                 with st.container(border=True):
                     st.markdown(f"**Ring {i+1}**")
                     default_w = round(float(2 * np.sin(theta) * r), 4)
-                    default_h = round(float(np.cos(theta) * r), 4)
+                    default_h = round(float(np.cos(theta) * r) + listener_height, 4)
                     tw = st.number_input("Width (m)", min_value=0.0, max_value=float(r * 20),
                         value=default_w, step=float(r * 0.1), key=f"tw_{i}_{cfg_key}")
                     td = st.number_input("Depth (m)", min_value=0.0, max_value=float(r * 20),
                         value=default_w, step=float(r * 0.1), key=f"td_{i}_{cfg_key}")
-                    th = st.number_input("Height (m)", min_value=float(-r * 4), max_value=float(r * 4),
+                    th = st.number_input("Height (m, above floor)", min_value=0.0, max_value=float(r * 4 + listener_height),
                         value=default_h, step=float(r * 0.05), key=f"th_{i}_{cfg_key}")
                     truss_widths.append(tw)
                     truss_depths.append(td)
@@ -319,7 +402,9 @@ with st.expander("🏗️ Truss Planner", expanded=False):
     ring_proj_pts = []
     ring_channels_list = []
     projected_elevations_all = []
-    projected_heights_afl = []   # height above floor = pz + listener_height
+    projected_x_all = []
+    projected_y_all = []
+    projected_z_all = []   # absolute height above floor = pz + listener_height
     orig_elevations_for_table = []
     orig_azimuths_for_table = []
     orig_channels_for_table = []
@@ -342,31 +427,44 @@ with st.expander("🏗️ Truss Planner", expanded=False):
         orig_ring, proj_ring, channels_ring = [], [], []
 
         for j, phi in enumerate(phi_vals):
+            _ch_j = channel_cursor + j
+            # Apply per-speaker position override if present
+            if _ch_j in _edited_positions:
+                _az_ov, _el_ov = _edited_positions[_ch_j]
+                _theta_ov = np.radians(90 - _el_ov)
+                _phi_ov = np.radians(_az_ov)
+            else:
+                _theta_ov, _phi_ov = theta, phi
+
             orig_ring.append((
-                float(r * np.sin(theta) * np.cos(phi)),
-                float(r * np.sin(theta) * np.sin(phi)),
-                float(r * np.cos(theta))
+                float(r * np.sin(_theta_ov) * np.cos(_phi_ov)),
+                float(r * np.sin(_theta_ov) * np.sin(_phi_ov)),
+                float(r * np.cos(_theta_ov))
             ))
 
-            az_deg = np.degrees(phi)
+            az_deg = np.degrees(_phi_ov)
             if az_deg > 180:
                 az_deg -= 360
             orig_azimuths_for_table.append(round(float(az_deg), 2))
-            orig_elevations_for_table.append(round(float(90 - np.degrees(theta)), 2))
-            orig_channels_for_table.append(channel_cursor + j)
+            orig_elevations_for_table.append(round(float(90 - np.degrees(_theta_ov)), 2))
+            orig_channels_for_table.append(_ch_j)
 
-            cp, sp = np.cos(phi), np.sin(phi)
+            cp, sp = np.cos(_phi_ov), np.sin(_phi_ov)
+            # th is floor-relative; height above listener = th - listener_height
+            _th_rel = th - listener_height
             if half_w < eps and half_d < eps:
                 px, py, pz = 0.0, 0.0, float(th)
                 proj_elev = 90.0
             else:
                 t = min(half_d / max(abs(cp), eps), half_w / max(abs(sp), eps))
                 px, py, pz = float(t * cp), float(t * sp), float(th)
-                proj_elev = float(np.degrees(np.arctan2(th, t)))
+                proj_elev = float(np.degrees(np.arctan2(_th_rel, t)))
 
             proj_ring.append((px, py, pz))
             projected_elevations_all.append(proj_elev)
-            projected_heights_afl.append(round(pz + listener_height, 3))
+            projected_x_all.append(round(px, 3))
+            projected_y_all.append(round(py, 3))
+            projected_z_all.append(round(pz, 3))
             channels_ring.append(channel_cursor + j)
 
         ring_orig_pts.append(orig_ring)
@@ -381,7 +479,7 @@ with st.expander("🏗️ Truss Planner", expanded=False):
     fig_truss = go.Figure()
 
     fig_truss.add_trace(go.Surface(
-        x=xs, y=ys, z=zs,
+        x=xs, y=ys, z=zs + listener_height,
         showscale=False, opacity=0.1,
         colorscale='Greys', name="Sphere", hoverinfo='skip'
     ))
@@ -395,7 +493,8 @@ with st.expander("🏗️ Truss Planner", expanded=False):
 
         # Original sphere positions — open circles, same ring color
         fig_truss.add_trace(go.Scatter3d(
-            x=[p[0] for p in orig_ring], y=[p[1] for p in orig_ring], z=[p[2] for p in orig_ring],
+            x=[p[0] for p in orig_ring], y=[p[1] for p in orig_ring],
+            z=[p[2] + listener_height for p in orig_ring],
             mode='markers',
             marker=dict(size=6, color='white', opacity=0.9,
                         line=dict(color=color, width=2), symbol='circle'),
@@ -414,7 +513,7 @@ with st.expander("🏗️ Truss Planner", expanded=False):
         for orig, proj in zip(orig_ring, proj_ring):
             line_x += [orig[0], proj[0], None]
             line_y += [orig[1], proj[1], None]
-            line_z += [orig[2], proj[2], None]
+            line_z += [orig[2] + listener_height, proj[2], None]
         fig_truss.add_trace(go.Scatter3d(
             x=line_x, y=line_y, z=line_z, mode='lines',
             line=dict(color=color, width=1, dash='dot'),
@@ -422,7 +521,8 @@ with st.expander("🏗️ Truss Planner", expanded=False):
         ))
 
         fig_truss.add_trace(go.Scatter3d(
-            x=[p[0] for p in proj_ring], y=[p[1] for p in proj_ring], z=[p[2] for p in proj_ring],
+            x=[p[0] for p in proj_ring], y=[p[1] for p in proj_ring],
+            z=[p[2] for p in proj_ring],
             mode='markers+text', marker=dict(size=5, color=color),
             text=[str(c) for c in ch_ring], textposition='top center',
             name=f"Ring {i+1} Projected"
@@ -430,14 +530,14 @@ with st.expander("🏗️ Truss Planner", expanded=False):
 
     max_half = max((max(tw, td) / 2 for tw, td in zip(truss_widths, truss_depths) if max(tw, td) > 0), default=1.0)
     scale_truss_xy = max(r * 1.1, max_half + 0.1)
-    max_th = max((abs(th) for th in truss_heights), default=0.0)
-    scale_truss_z = max(r * 1.1, max_th + 0.1)
+    max_th_afl = max(truss_heights, default=listener_height)
+    scale_truss_z = max(r * 1.1 + listener_height, max_th_afl + 0.1)
     fig_truss.update_layout(
         scene=dict(
-            aspectmode='manual', aspectratio=dict(x=1, y=1, z=scale_truss_z / scale_truss_xy),
+            aspectmode='manual', aspectratio=dict(x=1, y=1, z=scale_truss_z / (2 * scale_truss_xy)),
             xaxis=dict(range=[-scale_truss_xy, scale_truss_xy], title='X (m)  − back / + front'),
             yaxis=dict(range=[-scale_truss_xy, scale_truss_xy], title='Y (m)  − right / + left'),
-            zaxis=dict(range=[-scale_truss_xy, scale_truss_z], title='Z (m)')
+            zaxis=dict(range=[0, scale_truss_z], title='Z (m, above floor)')
         ),
         margin=dict(l=0, r=0, b=0, t=30),
         title="Speaker Projection: Sphere → Truss",
@@ -447,16 +547,19 @@ with st.expander("🏗️ Truss Planner", expanded=False):
 
     import pandas as pd
     elev_rows = []
-    for ch, az, orig_el, proj_el, h_afl in zip(
+    for ch, az, orig_el, proj_el, px, py, pz in zip(
             orig_channels_for_table, orig_azimuths_for_table,
-            orig_elevations_for_table, projected_elevations_all, projected_heights_afl):
+            orig_elevations_for_table, projected_elevations_all,
+            projected_x_all, projected_y_all, projected_z_all):
         delta = round(proj_el - orig_el, 2)
         elev_rows.append({
             "Ch": ch, "Az (°)": az,
             "Orig Elev (°)": orig_el,
             "Proj Elev (°)": round(proj_el, 2),
             "Δ Elev (°)": delta,
-            "Height afl (m)": h_afl,
+            "x (m)": px,
+            "y (m)": py,
+            "z (m)": pz,
         })
     elev_df = pd.DataFrame(elev_rows)
 
@@ -476,7 +579,7 @@ with st.expander("🏗️ Truss Planner", expanded=False):
         )
 
 
-with st.expander("🏠 Wall Mount Planner", expanded=False):
+with st.expander("🏠 Wall Mount Planner", expanded=st.session_state.get("wall_expander", False), key="wall_expander"):
     # --- Wall Mount Planner ---
     st.subheader("🏠 Wall Mount Planner")
 
@@ -518,9 +621,18 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
         phi_vals = np.linspace(0, 2 * np.pi, M, endpoint=False) + phi_offset
 
         for j, phi in enumerate(phi_vals):
-            dx = float(np.sin(theta) * np.cos(phi))
-            dy = float(np.sin(theta) * np.sin(phi))
-            dz = float(np.cos(theta))
+            _ch_wj = _ch_cursor + j
+            # Apply per-speaker position override if present
+            if _ch_wj in _edited_positions:
+                _az_ov, _el_ov = _edited_positions[_ch_wj]
+                _theta_ov = np.radians(90 - _el_ov)
+                _phi_ov = np.radians(_az_ov)
+            else:
+                _theta_ov, _phi_ov = theta, phi
+
+            dx = float(np.sin(_theta_ov) * np.cos(_phi_ov))
+            dy = float(np.sin(_theta_ov) * np.sin(_phi_ov))
+            dz = float(np.cos(_theta_ov))
 
             candidates = []
             if abs(dx) > _eps:
@@ -543,12 +655,12 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
             t_min, surface = min(candidates, key=lambda c: c[0])
             px, py, pz = t_min * dx, t_min * dy, t_min * dz
 
-            az_deg = float(np.degrees(phi))
+            az_deg = float(np.degrees(_phi_ov))
             if az_deg > 180:
                 az_deg -= 360
 
             wall_data.append({
-                "channel":        _ch_cursor + j,
+                "channel":        _ch_wj,
                 "surface":        surface,
                 "surface_name":   SURFACE_NAMES[surface],
                 "color":          SURFACE_COLORS[surface],
@@ -557,7 +669,7 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
                 "z":              round(pz, 3),
                 "h_above_floor":  round(pz + listener_height, 3),
                 "azimuth":        round(az_deg, 2),
-                "elevation":      round(float(90 - np.degrees(theta)), 2),
+                "elevation":      round(float(90 - np.degrees(_theta_ov)), 2),
             })
 
         _ch_cursor += M
@@ -594,13 +706,14 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
 
     # Sphere mesh (reference)
     fig_wall.add_trace(go.Surface(
-        x=xs, y=ys, z=zs,
+        x=xs, y=ys, z=zs + listener_height,
         showscale=False, opacity=0.08,
         colorscale='Greys', hoverinfo='skip', showlegend=False
     ))
 
-    # Room box
-    bx, by, bz = _box_edges(-half_rw, half_rw, -half_rl, half_rl, z_floor, z_ceil)
+    # Room box — z_floor/z_ceil are listener-relative; add listener_height for absolute coords
+    bx, by, bz = _box_edges(-half_rw, half_rw, -half_rl, half_rl,
+                             z_floor + listener_height, z_ceil + listener_height)
     fig_wall.add_trace(go.Scatter3d(
         x=bx, y=by, z=bz, mode='lines',
         line=dict(color='lightgrey', width=2),
@@ -609,7 +722,7 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
 
     # Listening position marker
     fig_wall.add_trace(go.Scatter3d(
-        x=[0], y=[0], z=[0], mode='markers',
+        x=[0], y=[0], z=[listener_height], mode='markers',
         marker=dict(size=6, color='black', symbol='cross'),
         name='Listening position'
     ))
@@ -617,7 +730,7 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
     # Original sphere positions
     if len(points) > 0:
         fig_wall.add_trace(go.Scatter3d(
-            x=points[:, 0], y=points[:, 1], z=points[:, 2],
+            x=points[:, 0], y=points[:, 1], z=points[:, 2] + listener_height,
             mode='markers',
             marker=dict(size=5, color='white', opacity=0.9,
                         line=dict(color='grey', width=2), symbol='circle'),
@@ -635,7 +748,7 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
         for d in pts:
             lx += [0, d['x'], None]
             ly += [0, d['y'], None]
-            lz += [0, d['z'], None]
+            lz += [listener_height, d['z'] + listener_height, None]
         fig_wall.add_trace(go.Scatter3d(
             x=lx, y=ly, z=lz, mode='lines',
             line=dict(color=color, width=1, dash='dot'),
@@ -645,7 +758,7 @@ with st.expander("🏠 Wall Mount Planner", expanded=False):
         fig_wall.add_trace(go.Scatter3d(
             x=[d['x'] for d in pts],
             y=[d['y'] for d in pts],
-            z=[d['z'] for d in pts],
+            z=[d['z'] + listener_height for d in pts],
             mode='markers+text',
             marker=dict(size=6, color=color),
             text=[str(d['channel']) for d in pts],
@@ -715,16 +828,26 @@ if st.button("🔗 Generate Share Link"):
             "td":    float(truss_depths[_i]),
             "th":    float(truss_heights[_i]),
         })
+    _spk_offsets = [
+        {"ch": int(_row["Ch"]),
+         "daz": round(float(_row["ΔAz (°)"]), 4),
+         "del": round(float(_row["ΔEl (°)"]), 4)}
+        for _, _row in _edited_spk_df.iterrows()
+        if abs(float(_row["ΔAz (°)"])) > 1e-9 or abs(float(_row["ΔEl (°)"])) > 1e-9
+    ]
     _cfg = {
-        "n":          N_points,
-        "rings":      N_rings,
-        "vog":        int(Voice_of_God),
-        "rbh":        int(Ring_below_horizon),
-        "r":          dome_radius,
-        "lh":         listener_height,
-        "title":      layout_title,
-        "desc":       layout_description,
-        "rings_data": _rings_data,
+        "n":           N_points,
+        "rings":       N_rings,
+        "vog":         int(Voice_of_God),
+        "rbh":         int(Ring_below_horizon),
+        "r":           dome_radius,
+        "lh":          listener_height,
+        "title":       layout_title,
+        "desc":        layout_description,
+        "rings_data":  _rings_data,
+        "spk_offsets": _spk_offsets,
+        "truss_exp":   int(st.session_state.get("truss_expander", False)),
+        "wall_exp":    int(st.session_state.get("wall_expander",  False)),
     }
     _encoded = base64.b64encode(json.dumps(_cfg).encode()).decode()
     st.query_params["cfg"] = _encoded
