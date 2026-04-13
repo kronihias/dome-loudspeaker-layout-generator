@@ -50,8 +50,9 @@ if _url_cfg is not None:
             int(o["ch"]): (float(o.get("daz", 0.0)), float(o.get("del", 0.0)))
             for o in _url_cfg.get("spk_offsets", [])
         }
-        st.session_state["truss_expander"] = bool(_url_cfg.get("truss_exp", False))
-        st.session_state["wall_expander"]  = bool(_url_cfg.get("wall_exp",  False))
+        # One-shot flags: consumed by the expanded= parameter on first render.
+        st.session_state["_truss_exp_init"] = bool(_url_cfg.get("truss_exp", False))
+        st.session_state["_wall_exp_init"]  = bool(_url_cfg.get("wall_exp",  False))
 
 # --- Parameter controls at the top ---
 st.title("🌐 Ambisonic Dome Loudspeaker Layout Generator")
@@ -369,7 +370,8 @@ with st.expander("📍 Show Loudspeaker Coordinates (Channel, Azimuth, Elevation
     st.dataframe(coord_table, use_container_width=True, hide_index=True)
 
 
-with st.expander("🏗️ Truss Planner", expanded=st.session_state.get("truss_expander", False), key="truss_expander"):
+with st.expander("🏗️ Truss Planner", key="truss_expander",
+                  expanded=st.session_state.pop("_truss_exp_init", st.session_state.get("truss_expander", False))):
     # --- Truss Configuration ---
     st.subheader("🏗️ Truss Configuration")
     truss_widths = []
@@ -579,7 +581,8 @@ with st.expander("🏗️ Truss Planner", expanded=st.session_state.get("truss_e
         )
 
 
-with st.expander("🏠 Wall Mount Planner", expanded=st.session_state.get("wall_expander", False), key="wall_expander"):
+with st.expander("🏠 Wall Mount Planner", key="wall_expander",
+                  expanded=st.session_state.pop("_wall_exp_init", st.session_state.get("wall_expander", False))):
     # --- Wall Mount Planner ---
     st.subheader("🏠 Wall Mount Planner")
 
