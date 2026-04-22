@@ -219,50 +219,77 @@ if _offsets_state_key not in st.session_state:
     st.session_state[_offsets_state_key] = st.session_state.pop("_pending_spk_offsets", {})
 _stored_offsets = st.session_state[_offsets_state_key]  # {channel: (daz, del)}
 
-# Pre-seed the dataframe from our stored state so the editor always shows current values
-# even if its own internal state was reset.
-_auto_spk_df = pd.DataFrame([
-    {"Ch": s["Channel"], "Az (°)": s["Azimuth"], "El (°)": s["Elevation"],
-     "ΔAz (°)": _stored_offsets.get(s["Channel"], (0.0, 0.0))[0],
-     "ΔEl (°)": _stored_offsets.get(s["Channel"], (0.0, 0.0))[1]}
-    for s in spherical_coords if not s["IsImaginary"]
-])
+_auto_spk_list = [s for s in spherical_coords if not s["IsImaginary"]]
 
 with st.expander("✏️ Speaker Position Offsets", expanded=False):
     st.caption("ΔAz and ΔEl are added to each speaker's auto-computed position. Resets when ring configuration changes.")
-    _edited_spk_df = st.data_editor(
-        _auto_spk_df,
-        key=_editor_key,
-        column_config={
-            "Ch":     st.column_config.NumberColumn(disabled=True),
-            "Az (°)": st.column_config.NumberColumn(disabled=True, format="%.2f"),
-            "El (°)": st.column_config.NumberColumn(disabled=True, format="%.2f"),
-            "ΔAz (°)": st.column_config.NumberColumn(
-                min_value=-180.0, max_value=180.0, step=0.1),
-            "ΔEl (°)": st.column_config.NumberColumn(
-                min_value=-90.0, max_value=90.0, step=0.1),
-        },
-        hide_index=True,
-        use_container_width=True,
-    )
+    if st.button("Reset all offsets to zero", key="reset_spk_offsets"):
+        for _s in _auto_spk_list:
+            _c = _s["Channel"]
+            st.session_state[f"daz_{_c}_{_editor_key}"] = 0.0
+            st.session_state[f"del_{_c}_{_editor_key}"] = 0.0
+        st.session_state[_offsets_state_key] = {}
+        st.rerun()
+
+    # Group speakers by ring using ring_point_counts
+    _delta_values = {}
+    _daz_vals = {}
+    _spk_idx = 0
+    for _ring_i, (_ring_count, _ring_theta) in enumerate(zip(ring_point_counts, theta_vals)):
+        if _ring_count == 0:
+            continue
+        _ring_spks = _auto_spk_list[_spk_idx: _spk_idx + _ring_count]
+        _spk_idx += _ring_count
+        _ring_el = round(90 - np.degrees(_ring_theta), 1)
+
+        st.markdown(f"**Ring {_ring_i + 1} — El {_ring_el}°**")
+        _label_w = 2
+        _tcols = st.columns([_label_w] + [1] * _ring_count)
+
+        # Ch header
+        _tcols[0].markdown("**Ch**")
+        for _i, _s in enumerate(_ring_spks):
+            _tcols[_i + 1].markdown(f"**{_s['Channel']}**")
+
+        # Az / El combined in one cell
+        _tcols[0].write("Az / El (°)")
+        for _i, _s in enumerate(_ring_spks):
+            _tcols[_i + 1].write(f"{float(_s['Azimuth']):.1f} / {float(_s['Elevation']):.1f}")
+
+        # ΔAz row
+        _tcols[0].markdown("**ΔAz (°)**")
+        for _i, _s in enumerate(_ring_spks):
+            _c = _s["Channel"]
+            _daz_vals[_c] = _tcols[_i + 1].number_input(
+                "ΔAz", value=float(_stored_offsets.get(_c, (0.0, 0.0))[0]),
+                min_value=-180.0, max_value=180.0,
+                key=f"daz_{_c}_{_editor_key}", label_visibility="collapsed"
+            )
+
+        # ΔEl row
+        _tcols[0].markdown("**ΔEl (°)**")
+        for _i, _s in enumerate(_ring_spks):
+            _c = _s["Channel"]
+            _del = _tcols[_i + 1].number_input(
+                "ΔEl", value=float(_stored_offsets.get(_c, (0.0, 0.0))[1]),
+                min_value=-90.0, max_value=90.0,
+                key=f"del_{_c}_{_editor_key}", label_visibility="collapsed"
+            )
+            _delta_values[_c] = (_daz_vals[_c], _del)
 
 # Persist offsets back into our own state after every render.
-st.session_state[_offsets_state_key] = {
-    int(_row["Ch"]): (float(_row["ΔAz (°)"]), float(_row["ΔEl (°)"]))
-    for _, _row in _edited_spk_df.iterrows()
-}
+st.session_state[_offsets_state_key] = _delta_values
 
 # Rebuild spherical_coords and points applying the delta offsets.
 # _edited_positions maps channel -> (final_az, final_el) for truss/wall planners.
 _edited_positions = {}
 _final_real = []
 _final_pts = []
-for _, _row in _edited_spk_df.iterrows():
-    _ch = int(_row["Ch"])
-    _az = float(_row["Az (°)"]) + float(_row["ΔAz (°)"])
-    _el = float(_row["El (°)"]) + float(_row["ΔEl (°)"])
-    _az = max(-180.0, min(180.0, _az))
-    _el = max(-90.0, min(90.0, _el))
+for _s in _auto_spk_list:
+    _ch = _s["Channel"]
+    _daz, _del = _delta_values.get(_ch, (0.0, 0.0))
+    _az = max(-180.0, min(180.0, float(_s["Azimuth"]) + _daz))
+    _el = max(-90.0,  min(90.0,  float(_s["Elevation"]) + _del))
     _edited_positions[_ch] = (_az, _el)
     _th = np.radians(90 - _el)
     _ph = np.radians(_az)
@@ -296,6 +323,7 @@ fig.add_trace(go.Scatter3d(
     marker=dict(size=4, color='red'),
     text=indices,
     textposition='top center',
+    textfont=dict(color='#111111', size=13, family='Arial Black'),
     name="Distributed Points"
 ))
 
@@ -344,6 +372,17 @@ ax.set_title("Mollweide Projection  (left speaker = left side)", fontsize=10, pa
 col_3d, col_moll = st.columns(2)
 with col_3d:
     st.subheader("🌐 3D View")
+    _m3d_cams = st.columns(6)
+    for _vi, (_vn, _vx, _vy, _vz) in enumerate([
+        ("3D", 1.8, 0, 0.5), ("Top", 0, 0, 2.5),
+        ("Front", 2.5, 0, 0.3), ("Back", -2.5, 0, 0.3),
+        ("Left", 0, 2.5, 0.3), ("Right", 0, -2.5, 0.3),
+    ]):
+        if _m3d_cams[_vi].button(_vn, key=f"main_cam_{_vn}", use_container_width=True):
+            st.session_state["main_3d_camera"] = dict(eye=dict(x=_vx, y=_vy, z=_vz))
+    fig.update_layout(
+        scene_camera=st.session_state.get("main_3d_camera", dict(eye=dict(x=1.8, y=0, z=0.5)))
+    )
     st.plotly_chart(fig, use_container_width=True)
 with col_moll:
     st.subheader("🌍 Mollweide Projection")
@@ -377,6 +416,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
     truss_widths = []
     truss_depths = []
     truss_heights = []
+    truss_ring_visible = []
 
     for _row_start in range(0, len(theta_vals), 5):
         _row_count = min(5, len(theta_vals) - _row_start)
@@ -398,6 +438,9 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
                     truss_widths.append(tw)
                     truss_depths.append(td)
                     truss_heights.append(th)
+                    truss_ring_visible.append(st.checkbox(
+                        "Show", value=True, key=f"truss_show_{i}_{cfg_key}"
+                    ))
 
     # Compute projected positions per ring
     ring_orig_pts = []
@@ -410,6 +453,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
     orig_elevations_for_table = []
     orig_azimuths_for_table = []
     orig_channels_for_table = []
+    ring_idx_for_table = []
 
     channel_cursor = 1
     for i, (theta, M, az_offset, tw, td, th) in enumerate(
@@ -450,6 +494,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
             orig_azimuths_for_table.append(round(float(az_deg), 2))
             orig_elevations_for_table.append(round(float(90 - np.degrees(_theta_ov)), 2))
             orig_channels_for_table.append(_ch_j)
+            ring_idx_for_table.append(i)
 
             cp, sp = np.cos(_phi_ov), np.sin(_phi_ov)
             # th is floor-relative; height above listener = th - listener_height
@@ -490,6 +535,8 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
             zip(truss_widths, truss_depths, truss_heights, ring_orig_pts, ring_proj_pts, ring_channels_list)):
         if not orig_ring:
             continue
+        if not truss_ring_visible[i]:
+            continue
         color = ring_colors[i % len(ring_colors)]
         W2, D2 = tw / 2, td / 2
 
@@ -527,6 +574,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
             z=[p[2] for p in proj_ring],
             mode='markers+text', marker=dict(size=5, color=color),
             text=[str(c) for c in ch_ring], textposition='top center',
+            textfont=dict(color='#111111', size=13, family='Arial Black'),
             name=f"Ring {i+1} Projected"
         ))
 
@@ -549,10 +597,12 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
 
     import pandas as pd
     elev_rows = []
-    for ch, az, orig_el, proj_el, px, py, pz in zip(
+    for ch, az, orig_el, proj_el, px, py, pz, _ri in zip(
             orig_channels_for_table, orig_azimuths_for_table,
             orig_elevations_for_table, projected_elevations_all,
-            projected_x_all, projected_y_all, projected_z_all):
+            projected_x_all, projected_y_all, projected_z_all, ring_idx_for_table):
+        if not truss_ring_visible[_ri]:
+            continue
         delta = round(proj_el - orig_el, 2)
         elev_rows.append({
             "Ch": ch, "Az (°)": az,
@@ -572,6 +622,17 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
     st.subheader("🏗️ Truss Projection")
     col_tv, col_tt = st.columns([3, 2])
     with col_tv:
+        _tv_cams = st.columns(6)
+        for _vi, (_vn, _vx, _vy, _vz) in enumerate([
+            ("3D", 1.8, 0, 0.5), ("Top", 0, 0, 2.5),
+            ("Front", 2.5, 0, 0.3), ("Back", -2.5, 0, 0.3),
+            ("Left", 0, 2.5, 0.3), ("Right", 0, -2.5, 0.3),
+        ]):
+            if _tv_cams[_vi].button(_vn, key=f"truss_cam_{_vn}", use_container_width=True):
+                st.session_state["truss_3d_camera"] = dict(eye=dict(x=_vx, y=_vy, z=_vz))
+        fig_truss.update_layout(
+            scene_camera=st.session_state.get("truss_3d_camera", dict(eye=dict(x=1.8, y=0, z=0.5)))
+        )
         st.plotly_chart(fig_truss, use_container_width=True)
     with col_tt:
         st.markdown("**Elevation Changes (Sphere → Truss)**")
@@ -593,6 +654,16 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
         room_length = st.number_input("Room Length (m)", min_value=0.1, max_value=500.0, value=10.0, step=0.5)
     with col_rh:
         room_height = st.number_input("Room Height (m)", min_value=0.1, max_value=100.0, value=5.0, step=0.5)
+
+    _wall_vis_rings = [(i, c) for i, c in enumerate(ring_point_counts) if c > 0]
+    wall_ring_visible = [True] * len(theta_vals)
+    if _wall_vis_rings:
+        st.markdown("**Ring Visibility**")
+        _wvcols = st.columns(min(len(_wall_vis_rings), 5))
+        for _wci, (i, _) in enumerate(_wall_vis_rings):
+            wall_ring_visible[i] = _wvcols[_wci % 5].checkbox(
+                f"Ring {i+1}", value=True, key=f"wall_show_{i}_{cfg_key}"
+            )
 
     # Adjusted frame: dome center (listening position) at origin, z up
     half_rw  = room_width  / 2
@@ -664,6 +735,7 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
 
             wall_data.append({
                 "channel":        _ch_wj,
+                "ring_index":     i,
                 "surface":        surface,
                 "surface_name":   SURFACE_NAMES[surface],
                 "color":          SURFACE_COLORS[surface],
@@ -687,7 +759,7 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
         "Height (m)":             d["h_above_floor"],
         "Az (°)":                 d["azimuth"],
         "Elev (°)":               d["elevation"],
-    } for d in wall_data])
+    } for d in wall_data if wall_ring_visible[d["ring_index"]]])
 
     # 3D visualisation
     st.subheader("🏠 Wall Mount Projection")
@@ -742,7 +814,7 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
 
     # Per-surface: projection lines + speaker dots
     for surf_key in ['x+', 'x-', 'y+', 'y-', 'z+', 'z-']:
-        pts = [d for d in wall_data if d['surface'] == surf_key]
+        pts = [d for d in wall_data if d['surface'] == surf_key and wall_ring_visible[d['ring_index']]]
         if not pts:
             continue
         color = SURFACE_COLORS[surf_key]
@@ -766,6 +838,7 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
             marker=dict(size=6, color=color),
             text=[str(d['channel']) for d in pts],
             textposition='top center',
+            textfont=dict(color='#111111', size=13, family='Arial Black'),
             name=SURFACE_NAMES[surf_key]
         ))
 
@@ -784,6 +857,17 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
 
     col_wv, col_wt = st.columns([3, 2])
     with col_wv:
+        _wv_cams = st.columns(6)
+        for _vi, (_vn, _vx, _vy, _vz) in enumerate([
+            ("3D", 1.8, 0, 0.5), ("Top", 0, 0, 2.5),
+            ("Front", 2.5, 0, 0.3), ("Back", -2.5, 0, 0.3),
+            ("Left", 0, 2.5, 0.3), ("Right", 0, -2.5, 0.3),
+        ]):
+            if _wv_cams[_vi].button(_vn, key=f"wall_cam_{_vn}", use_container_width=True):
+                st.session_state["wall_3d_camera"] = dict(eye=dict(x=_vx, y=_vy, z=_vz))
+        fig_wall.update_layout(
+            scene_camera=st.session_state.get("wall_3d_camera", dict(eye=dict(x=1.8, y=0, z=0.5)))
+        )
         st.plotly_chart(fig_wall, use_container_width=True)
     with col_wt:
         st.markdown("**Mount Positions**")
@@ -832,11 +916,9 @@ if st.button("🔗 Generate Share Link"):
             "th":    float(truss_heights[_i]),
         })
     _spk_offsets = [
-        {"ch": int(_row["Ch"]),
-         "daz": round(float(_row["ΔAz (°)"]), 4),
-         "del": round(float(_row["ΔEl (°)"]), 4)}
-        for _, _row in _edited_spk_df.iterrows()
-        if abs(float(_row["ΔAz (°)"])) > 1e-9 or abs(float(_row["ΔEl (°)"])) > 1e-9
+        {"ch": ch, "daz": round(daz, 4), "del": round(del_, 4)}
+        for ch, (daz, del_) in _delta_values.items()
+        if abs(daz) > 1e-9 or abs(del_) > 1e-9
     ]
     _cfg = {
         "n":           N_points,
