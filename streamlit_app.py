@@ -620,7 +620,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
         return [color] * len(row)
 
     st.subheader("🏗️ Truss Projection")
-    col_tv, col_tt = st.columns([3, 2])
+    col_tv, col_2d_truss = st.columns(2)
     with col_tv:
         _tv_cams = st.columns(6)
         for _vi, (_vn, _vx, _vy, _vz) in enumerate([
@@ -634,12 +634,117 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
             scene_camera=st.session_state.get("truss_3d_camera", dict(eye=dict(x=1.8, y=0, z=0.5)))
         )
         st.plotly_chart(fig_truss, use_container_width=True)
-    with col_tt:
-        st.markdown("**Elevation Changes (Sphere → Truss)**")
-        st.dataframe(
-            elev_df.style.apply(highlight_large_delta, axis=1),
-            use_container_width=True, hide_index=True
+    with col_2d_truss:
+        _t2d_view = st.selectbox("2D View", ["Front", "Side", "Top"], index=2,
+                                 key=f"truss_2d_view_{cfg_key}")
+        fig_truss_2d = go.Figure()
+        _grid = dict(showgrid=True, gridcolor='rgba(128,128,128,0.25)', gridwidth=1, dtick=1)
+        _tfont = dict(color='#111111', size=13, family='Arial Black')
+
+        def _tpos2d(dx, dy):
+            """Map screen-space direction from listener to a Plotly textposition."""
+            if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+                return 'top center'
+            a = float(np.degrees(np.arctan2(dy, dx)))
+            if   -22.5 <= a <=  22.5: return 'middle right'
+            elif  22.5 <  a <=  67.5: return 'top right'
+            elif  67.5 <  a <= 112.5: return 'top center'
+            elif 112.5 <  a <= 157.5: return 'top left'
+            elif a >  157.5 or a < -157.5: return 'middle left'
+            elif -157.5 <= a < -112.5: return 'bottom left'
+            elif -112.5 <= a <  -67.5: return 'bottom center'
+            else:                      return 'bottom right'
+
+        # Listener marker
+        _t2d_lx, _t2d_ly = (0, listener_height) if _t2d_view != "Top" else (0, 0)
+        fig_truss_2d.add_trace(go.Scatter(
+            x=[_t2d_lx], y=[_t2d_ly], mode='markers',
+            marker=dict(size=10, color='white', symbol='cross',
+                        line=dict(color='grey', width=2)),
+            cliponaxis=False, name='Listener'))
+        for _ri2, (tw2, td2, th2, proj2, ch2) in enumerate(
+                zip(truss_widths, truss_depths, truss_heights,
+                    ring_proj_pts, ring_channels_list)):
+            if not proj2 or not truss_ring_visible[_ri2]:
+                continue
+            _c2 = ring_colors[_ri2 % len(ring_colors)]
+            W22, D22 = tw2 / 2, td2 / 2
+            _px2 = [p[0] for p in proj2]
+            _py2 = [p[1] for p in proj2]
+            _pz2 = [p[2] for p in proj2]
+            _ct2 = [str(c) for c in ch2]
+            def _altpos(horiz_vals, invert=False):
+                """Alternate top/bottom per speaker; left/right from horizontal sign."""
+                out = []
+                for j, v in enumerate(horiz_vals):
+                    vert = 'top' if j % 2 == 0 else 'bottom'
+                    if invert:
+                        side = ' left' if v > 0.05 else (' right' if v < -0.05 else ' center')
+                    else:
+                        side = ' right' if v > 0.05 else (' left' if v < -0.05 else ' center')
+                    out.append(vert + side)
+                return out
+
+            if _t2d_view == "Front":
+                # Y axis inverted: positive Y appears on LEFT of screen
+                _tpos = _altpos(_py2, invert=True)
+                fig_truss_2d.add_trace(go.Scatter(
+                    x=[-W22, W22], y=[th2, th2],
+                    mode='lines', line=dict(color=_c2, width=3),
+                    name=f"Ring {_ri2+1}"))
+                fig_truss_2d.add_trace(go.Scatter(
+                    x=_py2, y=_pz2, mode='markers+text',
+                    text=_ct2, textposition=_tpos, textfont=_tfont,
+                    marker=dict(size=7, color=_c2), cliponaxis=False, showlegend=False))
+            elif _t2d_view == "Side":
+                # X axis not inverted: positive X appears on RIGHT of screen
+                _tpos = _altpos(_px2, invert=False)
+                fig_truss_2d.add_trace(go.Scatter(
+                    x=[-D22, D22], y=[th2, th2],
+                    mode='lines', line=dict(color=_c2, width=3),
+                    name=f"Ring {_ri2+1}"))
+                fig_truss_2d.add_trace(go.Scatter(
+                    x=_px2, y=_pz2, mode='markers+text',
+                    text=_ct2, textposition=_tpos, textfont=_tfont,
+                    marker=dict(size=7, color=_c2), cliponaxis=False, showlegend=False))
+            else:  # Top
+                # screen: x = −py (Y inverted), y = px (front = up)
+                _tpos = [_tpos2d(-py, px) for py, px in zip(_py2, _px2)]
+                fig_truss_2d.add_trace(go.Scatter(
+                    x=[-W22, W22, W22, -W22, -W22],
+                    y=[-D22, -D22, D22, D22, -D22],
+                    mode='lines', line=dict(color=_c2, width=3),
+                    name=f"Ring {_ri2+1}"))
+                fig_truss_2d.add_trace(go.Scatter(
+                    x=_py2, y=_px2, mode='markers+text',
+                    text=_ct2, textposition=_tpos, textfont=_tfont,
+                    marker=dict(size=7, color=_c2), cliponaxis=False, showlegend=False))
+        if _t2d_view == "Front":
+            fig_truss_2d.update_xaxes(title_text="Y (m) + left / − right",
+                autorange='reversed', **_grid)
+            fig_truss_2d.update_yaxes(title_text="Z (m, above floor)",
+                scaleanchor="x", scaleratio=1, **_grid)
+        elif _t2d_view == "Side":
+            fig_truss_2d.update_xaxes(title_text="X (m) − back / + front",
+                **_grid)
+            fig_truss_2d.update_yaxes(title_text="Z (m, above floor)",
+                scaleanchor="x", scaleratio=1, **_grid)
+        else:  # Top
+            fig_truss_2d.update_xaxes(title_text="Y (m) + left / − right",
+                autorange='reversed', **_grid)
+            fig_truss_2d.update_yaxes(title_text="X (m) − back / + front",
+                scaleanchor="x", scaleratio=1, **_grid)
+        fig_truss_2d.update_layout(
+            height=500, margin=dict(l=0, r=10, b=0, t=10),
+            legend=dict(yanchor="top", y=0.99, xanchor="right", x=1.0),
+            uirevision=_t2d_view,
         )
+        st.plotly_chart(fig_truss_2d, use_container_width=True)
+    st.markdown("**Elevation Changes (Sphere → Truss)**")
+    st.dataframe(
+        elev_df.style.apply(highlight_large_delta, axis=1),
+        use_container_width=True, hide_index=True
+    )
 
 
 with st.expander("🏠 Wall Mount Planner", key="wall_expander",
@@ -855,7 +960,7 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
         legend=dict(yanchor="top", y=0.85, xanchor="right", x=1.0)
     )
 
-    col_wv, col_wt = st.columns([3, 2])
+    col_wv, col_2d_wall = st.columns(2)
     with col_wv:
         _wv_cams = st.columns(6)
         for _vi, (_vn, _vx, _vy, _vz) in enumerate([
@@ -869,9 +974,95 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
             scene_camera=st.session_state.get("wall_3d_camera", dict(eye=dict(x=1.8, y=0, z=0.5)))
         )
         st.plotly_chart(fig_wall, use_container_width=True)
-    with col_wt:
-        st.markdown("**Mount Positions**")
-        st.dataframe(wall_df, use_container_width=True, hide_index=True)
+    with col_2d_wall:
+        _w2d_view = st.selectbox("2D View", ["Front", "Side", "Top"], index=2,
+                                 key=f"wall_2d_view_{cfg_key}")
+        fig_wall_2d = go.Figure()
+        _wgrid = dict(showgrid=True, gridcolor='rgba(128,128,128,0.25)', gridwidth=1, dtick=1)
+
+        def _wline(x0, x1, y0, y1, surf_key):
+            c = SURFACE_COLORS[surf_key]
+            return go.Scatter(
+                x=[x0, x1], y=[y0, y1], mode='lines',
+                line=dict(color=c, width=3),
+                name=SURFACE_NAMES[surf_key], showlegend=False, hoverinfo='skip')
+
+        # Room walls as coloured lines
+        if _w2d_view == "Front":  # Y-Z plane
+            fig_wall_2d.add_trace(_wline(half_rl, half_rl, 0, room_height, 'y+'))
+            fig_wall_2d.add_trace(_wline(-half_rl, -half_rl, 0, room_height, 'y-'))
+            fig_wall_2d.add_trace(_wline(-half_rl, half_rl, room_height, room_height, 'z+'))
+            fig_wall_2d.add_trace(_wline(-half_rl, half_rl, 0, 0, 'z-'))
+        elif _w2d_view == "Side":  # X-Z plane
+            fig_wall_2d.add_trace(_wline(half_rw, half_rw, 0, room_height, 'x+'))
+            fig_wall_2d.add_trace(_wline(-half_rw, -half_rw, 0, room_height, 'x-'))
+            fig_wall_2d.add_trace(_wline(-half_rw, half_rw, room_height, room_height, 'z+'))
+            fig_wall_2d.add_trace(_wline(-half_rw, half_rw, 0, 0, 'z-'))
+        else:  # Top — Y-X plane
+            fig_wall_2d.add_trace(_wline(half_rl, half_rl, -half_rw, half_rw, 'y+'))
+            fig_wall_2d.add_trace(_wline(-half_rl, -half_rl, -half_rw, half_rw, 'y-'))
+            fig_wall_2d.add_trace(_wline(-half_rl, half_rl, half_rw, half_rw, 'x+'))
+            fig_wall_2d.add_trace(_wline(-half_rl, half_rl, -half_rw, -half_rw, 'x-'))
+        # Listener marker
+        _w2d_lx, _w2d_ly = (0, listener_height) if _w2d_view != "Top" else (0, 0)
+        fig_wall_2d.add_trace(go.Scatter(
+            x=[_w2d_lx], y=[_w2d_ly], mode='markers',
+            marker=dict(size=10, color='white', symbol='cross',
+                        line=dict(color='grey', width=2)),
+            cliponaxis=False, name='Listener'))
+        # Speakers per surface
+        for _skey in ['x+', 'x-', 'y+', 'y-', 'z+', 'z-']:
+            _spts = [d for d in wall_data
+                     if d['surface'] == _skey and wall_ring_visible[d['ring_index']]]
+            if not _spts:
+                continue
+            _sc = SURFACE_COLORS[_skey]
+            _sn = SURFACE_NAMES[_skey]
+            _spx = [d['x'] for d in _spts]
+            _spy = [d['y'] for d in _spts]
+            _spz = [d['z'] + listener_height for d in _spts]
+            _spt = [str(d['channel']) for d in _spts]
+            if _w2d_view == "Front":
+                _wtpos = _altpos(_spy, invert=True)
+                fig_wall_2d.add_trace(go.Scatter(
+                    x=_spy, y=_spz, mode='markers+text',
+                    text=_spt, textposition=_wtpos, textfont=_tfont,
+                    marker=dict(size=7, color=_sc), cliponaxis=False, name=_sn))
+            elif _w2d_view == "Side":
+                _wtpos = _altpos(_spx, invert=False)
+                fig_wall_2d.add_trace(go.Scatter(
+                    x=_spx, y=_spz, mode='markers+text',
+                    text=_spt, textposition=_wtpos, textfont=_tfont,
+                    marker=dict(size=7, color=_sc), cliponaxis=False, name=_sn))
+            else:  # Top
+                _wtpos = [_tpos2d(-sy, sx) for sy, sx in zip(_spy, _spx)]
+                fig_wall_2d.add_trace(go.Scatter(
+                    x=_spy, y=_spx, mode='markers+text',
+                    text=_spt, textposition=_wtpos, textfont=_tfont,
+                    marker=dict(size=7, color=_sc), cliponaxis=False, name=_sn))
+        if _w2d_view == "Front":
+            fig_wall_2d.update_xaxes(title_text="Y (m) + left / − right",
+                autorange='reversed', **_wgrid)
+            fig_wall_2d.update_yaxes(title_text="Z (m, above floor)",
+                scaleanchor="x", scaleratio=1, **_wgrid)
+        elif _w2d_view == "Side":
+            fig_wall_2d.update_xaxes(title_text="X (m) − back / + front",
+                **_wgrid)
+            fig_wall_2d.update_yaxes(title_text="Z (m, above floor)",
+                scaleanchor="x", scaleratio=1, **_wgrid)
+        else:  # Top
+            fig_wall_2d.update_xaxes(title_text="Y (m) + left / − right",
+                autorange='reversed', **_wgrid)
+            fig_wall_2d.update_yaxes(title_text="X (m) − back / + front",
+                scaleanchor="x", scaleratio=1, **_wgrid)
+        fig_wall_2d.update_layout(
+            height=500, margin=dict(l=0, r=10, b=0, t=10),
+            legend=dict(yanchor="top", y=0.99, xanchor="right", x=1.0),
+            uirevision=_w2d_view,
+        )
+        st.plotly_chart(fig_wall_2d, use_container_width=True)
+    st.markdown("**Mount Positions**")
+    st.dataframe(wall_df, use_container_width=True, hide_index=True)
 
 
 # --- JSON download ---
