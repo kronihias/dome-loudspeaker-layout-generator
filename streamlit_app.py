@@ -409,6 +409,8 @@ with st.expander("📍 Show Loudspeaker Coordinates (Channel, Azimuth, Elevation
     st.dataframe(coord_table, use_container_width=True, hide_index=True)
 
 
+_ORIGIN_OPTS = ["Center", "Front Left", "Front Right", "Rear Left", "Rear Right"]
+
 with st.expander("🏗️ Truss Planner", key="truss_expander",
                   expanded=st.session_state.pop("_truss_exp_init", st.session_state.get("truss_expander", False))):
     # --- Truss Configuration ---
@@ -519,6 +521,20 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
         ring_channels_list.append(channels_ring)
         channel_cursor += M
 
+    # Coordinate origin selector
+    _vis_truss_w = [tw for tw, vis in zip(truss_widths, truss_ring_visible) if vis]
+    _vis_truss_d = [td for td, vis in zip(truss_depths, truss_ring_visible) if vis]
+    _t_max_W2 = max((_w / 2 for _w in _vis_truss_w), default=0.0)
+    _t_max_D2 = max((_d / 2 for _d in _vis_truss_d), default=0.0)
+    _t_origin = st.selectbox("Coordinate Origin", _ORIGIN_OPTS, key=f"truss_origin_{cfg_key}")
+    _t_ox, _t_oy = {
+        "Center":      (0.0,       0.0),
+        "Front Left":  (_t_max_D2,  _t_max_W2),
+        "Front Right": (_t_max_D2, -_t_max_W2),
+        "Rear Left":   (-_t_max_D2,  _t_max_W2),
+        "Rear Right":  (-_t_max_D2, -_t_max_W2),
+    }[_t_origin]
+
     # Truss 3D visualisation
     ring_colors = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
                    '#42d4f4', '#f032e6', '#bfef45', '#469990', '#dcbeff']
@@ -526,7 +542,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
     fig_truss = go.Figure()
 
     fig_truss.add_trace(go.Surface(
-        x=xs, y=ys, z=zs + listener_height,
+        x=xs - _t_ox, y=ys - _t_oy, z=zs + listener_height,
         showscale=False, opacity=0.1,
         colorscale='Greys', name="Sphere", hoverinfo='skip'
     ))
@@ -542,7 +558,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
 
         # Original sphere positions — open circles, same ring color
         fig_truss.add_trace(go.Scatter3d(
-            x=[p[0] for p in orig_ring], y=[p[1] for p in orig_ring],
+            x=[p[0] - _t_ox for p in orig_ring], y=[p[1] - _t_oy for p in orig_ring],
             z=[p[2] + listener_height for p in orig_ring],
             mode='markers',
             marker=dict(size=6, color='white', opacity=0.9,
@@ -551,8 +567,8 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
         ))
 
         fig_truss.add_trace(go.Scatter3d(
-            x=[-D2,  D2,  D2, -D2, -D2],
-            y=[-W2, -W2,  W2,  W2, -W2],
+            x=[-D2 - _t_ox,  D2 - _t_ox,  D2 - _t_ox, -D2 - _t_ox, -D2 - _t_ox],
+            y=[-W2 - _t_oy, -W2 - _t_oy,  W2 - _t_oy,  W2 - _t_oy, -W2 - _t_oy],
             z=[ th,  th,  th,  th,  th],
             mode='lines', line=dict(color=color, width=4),
             name=f"Ring {i+1} Truss"
@@ -560,8 +576,8 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
 
         line_x, line_y, line_z = [], [], []
         for orig, proj in zip(orig_ring, proj_ring):
-            line_x += [orig[0], proj[0], None]
-            line_y += [orig[1], proj[1], None]
+            line_x += [orig[0] - _t_ox, proj[0] - _t_ox, None]
+            line_y += [orig[1] - _t_oy, proj[1] - _t_oy, None]
             line_z += [orig[2] + listener_height, proj[2], None]
         fig_truss.add_trace(go.Scatter3d(
             x=line_x, y=line_y, z=line_z, mode='lines',
@@ -570,7 +586,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
         ))
 
         fig_truss.add_trace(go.Scatter3d(
-            x=[p[0] for p in proj_ring], y=[p[1] for p in proj_ring],
+            x=[p[0] - _t_ox for p in proj_ring], y=[p[1] - _t_oy for p in proj_ring],
             z=[p[2] for p in proj_ring],
             mode='markers+text', marker=dict(size=5, color=color),
             text=[str(c) for c in ch_ring], textposition='top center',
@@ -585,8 +601,8 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
     fig_truss.update_layout(
         scene=dict(
             aspectmode='manual', aspectratio=dict(x=1, y=1, z=scale_truss_z / (2 * scale_truss_xy)),
-            xaxis=dict(range=[-scale_truss_xy, scale_truss_xy], title='X (m)  − back / + front'),
-            yaxis=dict(range=[-scale_truss_xy, scale_truss_xy], title='Y (m)  − right / + left'),
+            xaxis=dict(range=[-scale_truss_xy - _t_ox, scale_truss_xy - _t_ox], title='X (m)  − back / + front'),
+            yaxis=dict(range=[-scale_truss_xy - _t_oy, scale_truss_xy - _t_oy], title='Y (m)  − right / + left'),
             zaxis=dict(range=[0, scale_truss_z], title='Z (m, above floor)')
         ),
         margin=dict(l=0, r=0, b=0, t=30),
@@ -609,8 +625,8 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
             "Orig Elev (°)": orig_el,
             "Proj Elev (°)": round(proj_el, 2),
             "Δ Elev (°)": delta,
-            "x (m)": px,
-            "y (m)": py,
+            "x (m)": round(px - _t_ox, 3),
+            "y (m)": round(py - _t_oy, 3),
             "z (m)": pz,
         })
     elev_df = pd.DataFrame(elev_rows)
@@ -656,7 +672,12 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
             else:                      return 'bottom right'
 
         # Listener marker
-        _t2d_lx, _t2d_ly = (0, listener_height) if _t2d_view != "Top" else (0, 0)
+        if _t2d_view == "Front":
+            _t2d_lx, _t2d_ly = -_t_oy, listener_height
+        elif _t2d_view == "Side":
+            _t2d_lx, _t2d_ly = -_t_ox, listener_height
+        else:
+            _t2d_lx, _t2d_ly = -_t_oy, -_t_ox
         fig_truss_2d.add_trace(go.Scatter(
             x=[_t2d_lx], y=[_t2d_ly], mode='markers',
             marker=dict(size=10, color='white', symbol='cross',
@@ -669,8 +690,8 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
                 continue
             _c2 = ring_colors[_ri2 % len(ring_colors)]
             W22, D22 = tw2 / 2, td2 / 2
-            _px2 = [p[0] for p in proj2]
-            _py2 = [p[1] for p in proj2]
+            _px2 = [p[0] - _t_ox for p in proj2]
+            _py2 = [p[1] - _t_oy for p in proj2]
             _pz2 = [p[2] for p in proj2]
             _ct2 = [str(c) for c in ch2]
             def _altpos(horiz_vals, invert=False):
@@ -689,7 +710,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
                 # Y axis inverted: positive Y appears on LEFT of screen
                 _tpos = _altpos(_py2, invert=True)
                 fig_truss_2d.add_trace(go.Scatter(
-                    x=[-W22, W22], y=[th2, th2],
+                    x=[-W22 - _t_oy, W22 - _t_oy], y=[th2, th2],
                     mode='lines', line=dict(color=_c2, width=3),
                     name=f"Ring {_ri2+1}"))
                 fig_truss_2d.add_trace(go.Scatter(
@@ -700,7 +721,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
                 # X axis not inverted: positive X appears on RIGHT of screen
                 _tpos = _altpos(_px2, invert=False)
                 fig_truss_2d.add_trace(go.Scatter(
-                    x=[-D22, D22], y=[th2, th2],
+                    x=[-D22 - _t_ox, D22 - _t_ox], y=[th2, th2],
                     mode='lines', line=dict(color=_c2, width=3),
                     name=f"Ring {_ri2+1}"))
                 fig_truss_2d.add_trace(go.Scatter(
@@ -711,8 +732,8 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
                 # screen: x = −py (Y inverted), y = px (front = up)
                 _tpos = [_tpos2d(-py, px) for py, px in zip(_py2, _px2)]
                 fig_truss_2d.add_trace(go.Scatter(
-                    x=[-W22, W22, W22, -W22, -W22],
-                    y=[-D22, -D22, D22, D22, -D22],
+                    x=[-W22 - _t_oy, W22 - _t_oy, W22 - _t_oy, -W22 - _t_oy, -W22 - _t_oy],
+                    y=[-D22 - _t_ox, -D22 - _t_ox, D22 - _t_ox, D22 - _t_ox, -D22 - _t_ox],
                     mode='lines', line=dict(color=_c2, width=3),
                     name=f"Ring {_ri2+1}"))
                 fig_truss_2d.add_trace(go.Scatter(
@@ -776,6 +797,15 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
     z_ceil   = room_height - listener_height
     z_floor  = -listener_height
 
+    _w_origin = st.selectbox("Coordinate Origin", _ORIGIN_OPTS, key=f"wall_origin_{cfg_key}")
+    _w_ox, _w_oy = {
+        "Center":      (0.0,      0.0),
+        "Front Left":  (half_rl,  half_rw),
+        "Front Right": (half_rl, -half_rw),
+        "Rear Left":   (-half_rl,  half_rw),
+        "Rear Right":  (-half_rl, -half_rw),
+    }[_w_origin]
+
     SURFACE_NAMES = {
         'x+': 'Front wall', 'x-': 'Back wall',
         'y+': 'Left wall',  'y-': 'Right wall',
@@ -815,9 +845,9 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
 
             candidates = []
             if abs(dx) > _eps:
-                candidates.append((half_rw / abs(dx), 'x+' if dx > 0 else 'x-'))
+                candidates.append((half_rl / abs(dx), 'x+' if dx > 0 else 'x-'))
             if abs(dy) > _eps:
-                candidates.append((half_rl / abs(dy), 'y+' if dy > 0 else 'y-'))
+                candidates.append((half_rw / abs(dy), 'y+' if dy > 0 else 'y-'))
             if dz > _eps:
                 t = z_ceil / dz
                 if t > 0:
@@ -859,8 +889,8 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
     wall_df = pd.DataFrame([{
         "Ch":                     d["channel"],
         "Surface":                d["surface_name"],
-        "x (m)":                  d["x"],
-        "y (m)":                  d["y"],
+        "x (m)":                  round(d["x"] - _w_ox, 3),
+        "y (m)":                  round(d["y"] - _w_oy, 3),
         "Height (m)":             d["h_above_floor"],
         "Az (°)":                 d["azimuth"],
         "Elev (°)":               d["elevation"],
@@ -892,7 +922,7 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
     ))
 
     # Room box — z_floor/z_ceil are listener-relative; add listener_height for absolute coords
-    bx, by, bz = _box_edges(-half_rw, half_rw, -half_rl, half_rl,
+    bx, by, bz = _box_edges(-half_rl - _w_ox, half_rl - _w_ox, -half_rw - _w_oy, half_rw - _w_oy,
                              z_floor + listener_height, z_ceil + listener_height)
     fig_wall.add_trace(go.Scatter3d(
         x=bx, y=by, z=bz, mode='lines',
@@ -902,7 +932,7 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
 
     # Listening position marker
     fig_wall.add_trace(go.Scatter3d(
-        x=[0], y=[0], z=[listener_height], mode='markers',
+        x=[-_w_ox], y=[-_w_oy], z=[listener_height], mode='markers',
         marker=dict(size=6, color='black', symbol='cross'),
         name='Listening position'
     ))
@@ -910,7 +940,7 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
     # Original sphere positions
     if len(points) > 0:
         fig_wall.add_trace(go.Scatter3d(
-            x=points[:, 0], y=points[:, 1], z=points[:, 2] + listener_height,
+            x=points[:, 0] - _w_ox, y=points[:, 1] - _w_oy, z=points[:, 2] + listener_height,
             mode='markers',
             marker=dict(size=5, color='white', opacity=0.9,
                         line=dict(color='grey', width=2), symbol='circle'),
@@ -926,8 +956,8 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
 
         lx, ly, lz = [], [], []
         for d in pts:
-            lx += [0, d['x'], None]
-            ly += [0, d['y'], None]
+            lx += [-_w_ox, d['x'] - _w_ox, None]
+            ly += [-_w_oy, d['y'] - _w_oy, None]
             lz += [listener_height, d['z'] + listener_height, None]
         fig_wall.add_trace(go.Scatter3d(
             x=lx, y=ly, z=lz, mode='lines',
@@ -936,8 +966,8 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
         ))
 
         fig_wall.add_trace(go.Scatter3d(
-            x=[d['x'] for d in pts],
-            y=[d['y'] for d in pts],
+            x=[d['x'] - _w_ox for d in pts],
+            y=[d['y'] - _w_oy for d in pts],
             z=[d['z'] + listener_height for d in pts],
             mode='markers+text',
             marker=dict(size=6, color=color),
@@ -989,22 +1019,27 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
 
         # Room walls as coloured lines
         if _w2d_view == "Front":  # Y-Z plane
-            fig_wall_2d.add_trace(_wline(half_rl, half_rl, 0, room_height, 'y+'))
-            fig_wall_2d.add_trace(_wline(-half_rl, -half_rl, 0, room_height, 'y-'))
-            fig_wall_2d.add_trace(_wline(-half_rl, half_rl, room_height, room_height, 'z+'))
-            fig_wall_2d.add_trace(_wline(-half_rl, half_rl, 0, 0, 'z-'))
+            fig_wall_2d.add_trace(_wline(half_rw - _w_oy, half_rw - _w_oy, 0, room_height, 'y+'))
+            fig_wall_2d.add_trace(_wline(-half_rw - _w_oy, -half_rw - _w_oy, 0, room_height, 'y-'))
+            fig_wall_2d.add_trace(_wline(-half_rw - _w_oy, half_rw - _w_oy, room_height, room_height, 'z+'))
+            fig_wall_2d.add_trace(_wline(-half_rw - _w_oy, half_rw - _w_oy, 0, 0, 'z-'))
         elif _w2d_view == "Side":  # X-Z plane
-            fig_wall_2d.add_trace(_wline(half_rw, half_rw, 0, room_height, 'x+'))
-            fig_wall_2d.add_trace(_wline(-half_rw, -half_rw, 0, room_height, 'x-'))
-            fig_wall_2d.add_trace(_wline(-half_rw, half_rw, room_height, room_height, 'z+'))
-            fig_wall_2d.add_trace(_wline(-half_rw, half_rw, 0, 0, 'z-'))
+            fig_wall_2d.add_trace(_wline(half_rl - _w_ox, half_rl - _w_ox, 0, room_height, 'x+'))
+            fig_wall_2d.add_trace(_wline(-half_rl - _w_ox, -half_rl - _w_ox, 0, room_height, 'x-'))
+            fig_wall_2d.add_trace(_wline(-half_rl - _w_ox, half_rl - _w_ox, room_height, room_height, 'z+'))
+            fig_wall_2d.add_trace(_wline(-half_rl - _w_ox, half_rl - _w_ox, 0, 0, 'z-'))
         else:  # Top — Y-X plane
-            fig_wall_2d.add_trace(_wline(half_rl, half_rl, -half_rw, half_rw, 'y+'))
-            fig_wall_2d.add_trace(_wline(-half_rl, -half_rl, -half_rw, half_rw, 'y-'))
-            fig_wall_2d.add_trace(_wline(-half_rl, half_rl, half_rw, half_rw, 'x+'))
-            fig_wall_2d.add_trace(_wline(-half_rl, half_rl, -half_rw, -half_rw, 'x-'))
+            fig_wall_2d.add_trace(_wline(half_rw - _w_oy, half_rw - _w_oy, -half_rl - _w_ox, half_rl - _w_ox, 'y+'))
+            fig_wall_2d.add_trace(_wline(-half_rw - _w_oy, -half_rw - _w_oy, -half_rl - _w_ox, half_rl - _w_ox, 'y-'))
+            fig_wall_2d.add_trace(_wline(-half_rw - _w_oy, half_rw - _w_oy, half_rl - _w_ox, half_rl - _w_ox, 'x+'))
+            fig_wall_2d.add_trace(_wline(-half_rw - _w_oy, half_rw - _w_oy, -half_rl - _w_ox, -half_rl - _w_ox, 'x-'))
         # Listener marker
-        _w2d_lx, _w2d_ly = (0, listener_height) if _w2d_view != "Top" else (0, 0)
+        if _w2d_view == "Front":
+            _w2d_lx, _w2d_ly = -_w_oy, listener_height
+        elif _w2d_view == "Side":
+            _w2d_lx, _w2d_ly = -_w_ox, listener_height
+        else:
+            _w2d_lx, _w2d_ly = -_w_oy, -_w_ox
         fig_wall_2d.add_trace(go.Scatter(
             x=[_w2d_lx], y=[_w2d_ly], mode='markers',
             marker=dict(size=10, color='white', symbol='cross',
@@ -1018,8 +1053,8 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
                 continue
             _sc = SURFACE_COLORS[_skey]
             _sn = SURFACE_NAMES[_skey]
-            _spx = [d['x'] for d in _spts]
-            _spy = [d['y'] for d in _spts]
+            _spx = [d['x'] - _w_ox for d in _spts]
+            _spy = [d['y'] - _w_oy for d in _spts]
             _spz = [d['z'] + listener_height for d in _spts]
             _spt = [str(d['channel']) for d in _spts]
             if _w2d_view == "Front":
