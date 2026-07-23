@@ -8,6 +8,8 @@ import re
 import hashlib
 from datetime import datetime
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+import allrad
 
 # --- Load config from URL (must run before any widgets) ---
 _url_cfg = None
@@ -29,6 +31,9 @@ if _url_cfg is not None:
         st.session_state["w_listener_height"]  = float(_url_cfg.get("lh", 1.3))
         st.session_state["w_layout_title"]     = str(_url_cfg.get("title", ""))
         st.session_state["w_layout_description"] = str(_url_cfg.get("desc", ""))
+        st.session_state["w_numdir"] = ["Counter-clockwise", "Clockwise"][int(_url_cfg.get("dir", 0))]
+        st.session_state["w_dec_order"]   = int(_url_cfg.get("dec_order", 5))
+        st.session_state["w_dec_weights"] = str(_url_cfg.get("dec_weights", "maxrE"))
 
         _n  = st.session_state["w_n_points"]
         _nr = st.session_state["w_n_rings"]
@@ -83,6 +88,18 @@ with col2:
 with col3:
     dome_radius = st.number_input("Dome Radius (m)", min_value=0.1, max_value=500.0, value=3.0, step=0.5, key="w_dome_radius")
     listener_height = st.number_input("Listener Height (m)", min_value=0.0, max_value=50.0, value=1.3, step=0.1, key="w_listener_height")
+
+_numbering_dir = st.selectbox(
+    "Speaker Numbering Direction",
+    ["Counter-clockwise", "Clockwise"],
+    key="w_numdir",
+    help="Order in which channel numbers are assigned around each ring. "
+         "Counter-clockwise = increasing azimuth (towards the left); "
+         "clockwise = decreasing azimuth (towards the right). "
+         "Numbering always starts (channel 1) on the 0° elevation ring; any "
+         "ring below the horizon is numbered last.",
+)
+clockwise = (_numbering_dir == "Clockwise")
 
 # --- Ring configuration ---
 st.subheader("🔧 Ring Configuration")
@@ -159,6 +176,37 @@ _actual_total = sum(ring_point_counts)
 _actual_total_placeholder.metric("Actual Total Speakers", _actual_total,
     delta=int(_actual_total - N_points) if _actual_total != N_points else None)
 
+
+def compute_ring_channels(counts, thetas, cw):
+    """Assign channel numbers per ring.
+
+    Numbering always starts (channel 1) with the 0°-elevation ring and proceeds
+    outward/upward in the ring order; rings below the horizon are numbered last.
+    Within each ring, ``cw=False`` numbers counter-clockwise (increasing
+    azimuth) and ``cw=True`` clockwise, keeping the first speaker of each ring
+    (at the azimuth offset) fixed and reversing the direction of the rest.
+    """
+    n = len(counts)
+    elevs = [90.0 - np.degrees(t) for t in thetas]
+    above = [i for i in range(n) if elevs[i] >= -1e-6]
+    below = [i for i in range(n) if elevs[i] < -1e-6]
+    order = above + below
+    ring_ch = [[] for _ in range(n)]
+    base = 1
+    for i in order:
+        M = int(counts[i])
+        if M <= 0:
+            continue
+        if cw:
+            ring_ch[i] = [base] + [base + (M - j) for j in range(1, M)]
+        else:
+            ring_ch[i] = [base + j for j in range(M)]
+        base += M
+    return ring_ch
+
+
+ring_channels = compute_ring_channels(ring_point_counts, theta_vals, clockwise)
+
 # --- Core logic ---
 spherical_coords = []
 points = []
@@ -175,7 +223,7 @@ for i, (theta, M, az_offset) in enumerate(zip(theta_vals, ring_point_counts, azi
         z = r * np.cos(theta)
         points.append((x, y, z))
 
-    for phi in phi_vals:
+    for j, phi in enumerate(phi_vals):
         azimuth_deg = np.degrees(phi)
         if azimuth_deg > 180:
             azimuth_deg -= 360
@@ -185,13 +233,16 @@ for i, (theta, M, az_offset) in enumerate(zip(theta_vals, ring_point_counts, azi
             "Elevation": round(elevation_deg, 2),
             "Radius": 1.0,
             "IsImaginary": False,
-            "Channel": len(spherical_coords) + 1,
+            "Channel": ring_channels[i][j],
             "Gain": 1.0
         })
 
 points = np.array(points)
 
-# Add imaginary speaker
+# Add imaginary speaker ("voice of hell") to close the convex hull below the
+# layout. Gain 1.0 keeps the imaginary speaker's panned share redistributed to
+# the surrounding real loudspeakers (the AllRAD kappa scheme) rather than
+# discarded.
 spherical_coords.append({
     "Azimuth": 0,
     "Elevation": -90,
@@ -205,7 +256,7 @@ spherical_coords.append({
 # Build a config hash that changes whenever any ring parameter changes so that
 # manual edits are automatically discarded when the ring layout is reconfigured.
 import pandas as pd
-_spk_config_str = cfg_key + "|" + "|".join(
+_spk_config_str = cfg_key + f"|dir{int(clockwise)}|" + "|".join(
     f"{round(float(t),5)},{c},{round(float(a),4)}"
     for t, c, a in zip(theta_vals, ring_point_counts, azimuth_offsets)
 )
@@ -299,10 +350,13 @@ for _s in _auto_spk_list:
     _final_real.append({"Azimuth": round(_az, 2), "Elevation": round(_el, 2),
                         "Radius": 1.0, "IsImaginary": False, "Channel": _ch, "Gain": 1.0})
 
-spherical_coords = _final_real + [s for s in spherical_coords if s["IsImaginary"]]
+# `points`/`indices` stay in ring (generation) order and are aligned with each
+# other for the 3D plot; `spherical_coords` is sorted by channel for the tables
+# and the JSON export.
+indices = [str(_s["Channel"]) for _s in _final_real]
 points = np.array(_final_pts) if _final_pts else np.zeros((0, 3))
-
-indices = [str(i+1) for i in range(len(points))]
+spherical_coords = sorted(_final_real, key=lambda s: s["Channel"]) + \
+    [s for s in spherical_coords if s["IsImaginary"]]
 
 # Sphere mesh
 u = np.linspace(0, np.pi, 50)
@@ -411,7 +465,7 @@ with st.expander("📍 Show Loudspeaker Coordinates (Channel, Azimuth, Elevation
 
 _ORIGIN_OPTS = ["Center", "Front Left", "Front Right", "Rear Left", "Rear Right"]
 
-with st.expander("🏗️ Truss Planner", key="truss_expander",
+with st.expander("🏗️ Truss Planner",
                   expanded=st.session_state.pop("_truss_exp_init", st.session_state.get("truss_expander", False))):
     # --- Truss Configuration ---
     st.subheader("🏗️ Truss Configuration")
@@ -457,7 +511,6 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
     orig_channels_for_table = []
     ring_idx_for_table = []
 
-    channel_cursor = 1
     for i, (theta, M, az_offset, tw, td, th) in enumerate(
             zip(theta_vals, ring_point_counts, azimuth_offsets, truss_widths, truss_depths, truss_heights)):
         if M == 0:
@@ -475,7 +528,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
         orig_ring, proj_ring, channels_ring = [], [], []
 
         for j, phi in enumerate(phi_vals):
-            _ch_j = channel_cursor + j
+            _ch_j = ring_channels[i][j]
             # Apply per-speaker position override if present
             if _ch_j in _edited_positions:
                 _az_ov, _el_ov = _edited_positions[_ch_j]
@@ -514,12 +567,11 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
             projected_x_all.append(round(px, 3))
             projected_y_all.append(round(py, 3))
             projected_z_all.append(round(pz, 3))
-            channels_ring.append(channel_cursor + j)
+            channels_ring.append(_ch_j)
 
         ring_orig_pts.append(orig_ring)
         ring_proj_pts.append(proj_ring)
         ring_channels_list.append(channels_ring)
-        channel_cursor += M
 
     # Coordinate origin selector
     _vis_truss_w = [tw for tw, vis in zip(truss_widths, truss_ring_visible) if vis]
@@ -768,7 +820,7 @@ with st.expander("🏗️ Truss Planner", key="truss_expander",
     )
 
 
-with st.expander("🏠 Wall Mount Planner", key="wall_expander",
+with st.expander("🏠 Wall Mount Planner",
                   expanded=st.session_state.pop("_wall_exp_init", st.session_state.get("wall_expander", False))):
     # --- Wall Mount Planner ---
     st.subheader("🏠 Wall Mount Planner")
@@ -820,17 +872,15 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
     # Compute mount positions for each speaker
     wall_data = []
     _eps = 1e-9
-    _ch_cursor = 1
 
     for i, (theta, M, az_offset) in enumerate(zip(theta_vals, ring_point_counts, azimuth_offsets)):
         if M == 0:
-            _ch_cursor += M
             continue
         phi_offset = np.radians(az_offset)
         phi_vals = np.linspace(0, 2 * np.pi, M, endpoint=False) + phi_offset
 
         for j, phi in enumerate(phi_vals):
-            _ch_wj = _ch_cursor + j
+            _ch_wj = ring_channels[i][j]
             # Apply per-speaker position override if present
             if _ch_wj in _edited_positions:
                 _az_ov, _el_ov = _edited_positions[_ch_wj]
@@ -858,7 +908,6 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
                     candidates.append((t, 'z-'))
 
             if not candidates:
-                _ch_cursor += 1
                 continue
 
             t_min, surface = min(candidates, key=lambda c: c[0])
@@ -881,8 +930,6 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
                 "azimuth":        round(az_deg, 2),
                 "elevation":      round(float(90 - np.degrees(_theta_ov)), 2),
             })
-
-        _ch_cursor += M
 
     # Build wall mount table before columns
     import pandas as pd
@@ -1100,16 +1147,138 @@ with st.expander("🏠 Wall Mount Planner", key="wall_expander",
     st.dataframe(wall_df, use_container_width=True, hide_index=True)
 
 
+# --- Decoder calculation & energy distribution ---
+st.markdown("---")
+st.subheader("🎚️ Decoder & Energy Distribution")
+st.markdown(
+    "Calculate an **AllRAD** decoder for this layout — the same All-Round Ambisonic "
+    "Decoding approach used by the IEM AllRADecoder — and visualise the energy "
+    "distribution of the decoded sound field. Brighter red means *more* energy than "
+    "the average direction, so a smooth, even field indicates a well-behaved decoder "
+    "while blotchy hot/cold spots reveal energy fluctuations. Once calculated, the "
+    "decoder matrix is included in the JSON export."
+)
+
+
+def _ordinal(n):
+    return f"{n}{'th' if 11 <= n % 100 <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def _layout_signature(coords):
+    return hashlib.md5(json.dumps([
+        (round(float(s["Azimuth"]), 3), round(float(s["Elevation"]), 3),
+         int(s["Channel"]), bool(s["IsImaginary"]), round(float(s.get("Gain", 1.0)), 4))
+        for s in coords
+    ]).encode()).hexdigest()
+
+
+_cur_layout_sig = _layout_signature(spherical_coords)
+
+st.session_state.setdefault("w_dec_order", 5)
+st.session_state.setdefault("w_dec_weights", "maxrE")
+
+_dcol1, _dcol2, _dcol3 = st.columns([1, 1, 1])
+with _dcol1:
+    _dec_order = st.selectbox(
+        "Decoder Order", list(range(1, allrad.MAX_ORDER + 1)),
+        key="w_dec_order", format_func=lambda o: f"{_ordinal(o)} order",
+        help="Ambisonic order of the decoder. A higher order needs enough "
+             "loudspeakers to be supported — otherwise the energy fluctuates more.",
+    )
+with _dcol2:
+    _dec_weights = st.selectbox(
+        "Weights", ["maxrE", "inPhase", "none"], key="w_dec_weights",
+        help="Ambisonic weighting. maxrE is the usual choice for playback.",
+    )
+with _dcol3:
+    st.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
+    _calc_decoder = st.button("🧮 Calculate Decoder", use_container_width=True)
+
+if _calc_decoder:
+    try:
+        with st.spinner("Calculating AllRAD decoder…"):
+            _res = allrad.calculate_allrad(spherical_coords, _dec_order, _dec_weights)
+            _e_az, _e_el, _e_lvl, _e_mean = allrad.energy_distribution(_res)
+        st.session_state["_decoder"] = {
+            "sig": _cur_layout_sig,
+            "order": int(_dec_order),
+            "weights": _dec_weights,
+            "json": allrad.decoder_to_json(_res),
+            "n_real": int(_res.matrix.shape[0]),
+            "n_coeffs": int(_res.matrix.shape[1]),
+            "az": _e_az, "el": _e_el, "lvl": _e_lvl, "mean": _e_mean,
+        }
+        st.success("**Decoder created** — the decoder was calculated successfully.")
+    except Exception as _exc:  # noqa: BLE001
+        st.session_state.pop("_decoder", None)
+        st.error(f"Could not calculate the decoder: {_exc}")
+
+_dec = st.session_state.get("_decoder")
+_dec_valid = _dec is not None and _dec["sig"] == _cur_layout_sig
+if _dec is not None and not _dec_valid:
+    st.info("The layout has changed since the decoder was calculated. "
+            "Press **Calculate Decoder** to update the decoder and energy plot.")
+
+if _dec_valid:
+    st.caption(
+        f"AllRAD decoder: {_ordinal(_dec['order'])} order · {_dec['n_coeffs']} "
+        f"ambisonic channels → {_dec['n_real']} loudspeakers · weights: {_dec['weights']} · "
+        "N3D / ACN. Included in the JSON export below."
+    )
+
+    _e_az, _e_el, _e_lvl, _e_mean = _dec["az"], _dec["el"], _dec["lvl"], _dec["mean"]
+    # Plot longitude = −azimuth so the left side of the layout appears on the left;
+    # flip along the azimuth axis to keep the mesh coordinates monotonically increasing.
+    _lon = np.radians(-_e_az)[:, ::-1]
+    _lat = np.radians(_e_el)[:, ::-1]
+    _lvlp = _e_lvl[:, ::-1]
+
+    _energy_cmap = LinearSegmentedColormap.from_list(
+        "energy", ["#000000", "#4d0000", "#a30000", "#ff2b2b", "#ff9d9d"])
+
+    fig_energy, ax_e = plt.subplots(figsize=(7, 4), subplot_kw={"projection": "mollweide"})
+    ax_e.set_facecolor("black")
+    _pcm = ax_e.pcolormesh(_lon, _lat, _lvlp, cmap=_energy_cmap,
+                           vmin=_e_mean - 1.5, vmax=_e_mean + 1.5, shading="gouraud")
+    ax_e.grid(True, linestyle="--", linewidth=0.4, color="#888888", alpha=0.6)
+    ax_e.scatter(-azimuths_rad, elevations_rad, s=16,
+                 facecolors="none", edgecolors="#00e5ff", linewidths=1.2)
+    for _az, _el, _label in zip(-azimuths_rad, elevations_rad, labels):
+        ax_e.text(_az, _el, _label, fontsize=8, fontweight="bold",
+                  ha="center", va="center", color="white")
+    ax_e.set_xticklabels(['150°L', '120°L', '90°L', '60°L', '30°L', '0°',
+                          '30°R', '60°R', '90°R', '120°R', '150°R'], fontsize=8)
+    ax_e.tick_params(colors="#444444")
+    ax_e.set_title("Energy Distribution  (left speaker = left side)", fontsize=10, pad=15)
+    _cbar = fig_energy.colorbar(_pcm, ax=ax_e, fraction=0.025, pad=0.04)
+    _cbar.set_label("energy relative to mean (dB)", fontsize=8)
+    _cbar.ax.tick_params(labelsize=7)
+
+    _ecol1, _ecol2 = st.columns([3, 2])
+    with _ecol1:
+        st.pyplot(fig_energy)
+    with _ecol2:
+        _fluct = float(_e_lvl.max() - _e_lvl.min())
+        st.metric("Energy fluctuation (peak-to-peak)", f"{_fluct:.2f} dB")
+        st.caption(
+            "Lower is better. Fluctuations grow when the chosen order is too high "
+            "for the number of loudspeakers, or where the layout leaves gaps "
+            "(e.g. below the horizon)."
+        )
+
+
 # --- JSON download ---
 _safe_title = re.sub(r'[^\w\-]', '_', layout_title)[:40] if layout_title else ""
 json_data = {
     "Name": layout_title or "All-Round Ambisonic decoder loudspeaker layout, importable in IEM AllRAD Decoder Plugin.",
     "Description": (layout_description + " — " if layout_description else "") +
                    f"Created with the Dome Loudspeaker Layout Generator by Matthias Kronlachner. {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-    "LoudspeakerLayout": {
-        "Name": layout_title or "Generated loudspeaker layout",
-        "Loudspeakers": spherical_coords
-    }
+}
+if _dec_valid:
+    json_data["Decoder"] = _dec["json"]
+json_data["LoudspeakerLayout"] = {
+    "Name": layout_title or "Generated loudspeaker layout",
+    "Loudspeakers": spherical_coords,
 }
 
 json_str = json.dumps(json_data, indent=2)
@@ -1127,6 +1296,9 @@ st.download_button(
 
 
 st.markdown("* IMPORT the `.json` file in the [IEM AllRADecoder plugin](https://plugins.iem.at), and press `Calculate Decoder`.")
+if _dec_valid:
+    st.markdown("* The export also contains a ready-to-use **AllRAD decoder** "
+                "(`Decoder` object) — importable directly in the IEM SimpleDecoder.")
 
 # --- Share link ---
 st.markdown("---")
@@ -1155,6 +1327,9 @@ if st.button("🔗 Generate Share Link"):
         "lh":          listener_height,
         "title":       layout_title,
         "desc":        layout_description,
+        "dir":         int(clockwise),
+        "dec_order":   int(st.session_state.get("w_dec_order", 5)),
+        "dec_weights": str(st.session_state.get("w_dec_weights", "maxrE")),
         "rings_data":  _rings_data,
         "spk_offsets": _spk_offsets,
         "truss_exp":   int(st.session_state.get("truss_expander", False)),
