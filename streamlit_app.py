@@ -1258,12 +1258,19 @@ if _dec_valid:
     with _ecol1:
         st.pyplot(fig_energy)
     with _ecol2:
-        _fluct = float(_e_lvl.max() - _e_lvl.min())
+        # Report the fluctuation over the region the loudspeakers actually cover
+        # — the upper hemisphere, extended down to the lowest ring if one sits
+        # below the horizon. Including the empty region further below would just
+        # measure the unavoidable roll-off there, not the quality of the decode.
+        _cov_floor = min(elevations) if elevations else 0.0
+        _cov = _e_lvl[_e_el >= _cov_floor]
+        _fluct = float(_cov.max() - _cov.min())
         st.metric("Energy fluctuation (peak-to-peak)", f"{_fluct:.2f} dB")
         st.caption(
-            "Lower is better. Fluctuations grow when the chosen order is too high "
-            "for the number of loudspeakers, or where the layout leaves gaps "
-            "(e.g. below the horizon)."
+            f"Measured over the loudspeaker-covered region (elevation ≥ {_cov_floor:.0f}°). "
+            "Lower is better — fluctuations grow when the chosen order is too high "
+            "for the number of loudspeakers. The roll-off below the lowest ring "
+            "(no loudspeakers there) is excluded."
         )
 
 
