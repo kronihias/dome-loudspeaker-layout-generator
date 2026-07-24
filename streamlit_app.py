@@ -484,7 +484,9 @@ with st.expander("🏗️ Truss Planner",
                 with st.container(border=True):
                     st.markdown(f"**Ring {i+1}**")
                     default_w = round(float(2 * np.sin(theta) * r), 4)
-                    default_h = round(float(np.cos(theta) * r) + listener_height, 4)
+                    # Rings below the horizon can project below the floor; clamp the
+                    # default height to floor level so it satisfies min_value=0.0.
+                    default_h = max(0.0, round(float(np.cos(theta) * r) + listener_height, 4))
                     tw = st.number_input("Width (m)", min_value=0.0, max_value=float(r * 20),
                         value=default_w, step=float(r * 0.1), key=f"tw_{i}_{cfg_key}")
                     td = st.number_input("Depth (m)", min_value=0.0, max_value=float(r * 20),
