@@ -7,9 +7,8 @@ import base64
 import re
 import hashlib
 from datetime import datetime
-import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 import allrad
+import hammer
 
 # --- Load config from URL (must run before any widgets) ---
 _url_cfg = None
@@ -63,7 +62,7 @@ if _url_cfg is not None:
 st.title("🌐 Ambisonic Dome Loudspeaker Layout Generator")
 st.markdown(
     "Generate optimised loudspeaker layouts for ambisonic dome systems. "
-    "Configure elevation rings, visualise the 3D layout and Mollweide projection, "
+    "Configure elevation rings, visualise the 3D layout and Hammer-Aitoff projection, "
     "plan speaker placement on a rectangular **truss**, or project positions onto **room walls and ceiling**. "
     "Export the layout as an IEM AllRADecoder-compatible JSON file or share the configuration via URL."
 )
@@ -409,19 +408,10 @@ azimuths = [spk["Azimuth"] for spk in spherical_coords if not spk["IsImaginary"]
 elevations = [spk["Elevation"] for spk in spherical_coords if not spk["IsImaginary"]]
 labels = [str(spk["Channel"]) for spk in spherical_coords if not spk["IsImaginary"]]
 
-azimuths_rad = np.radians(azimuths)
-elevations_rad = np.radians(elevations)
-
-fig2, ax = plt.subplots(figsize=(7, 4), subplot_kw={'projection': 'mollweide'})
-ax.grid(True, linestyle='--', linewidth=0.5)
-# Negate azimuths so that left (+) appears on the left of the plot
-ax.scatter(-azimuths_rad, elevations_rad, color='yellow', s=20)
-
-for _az, _el, label in zip(-azimuths_rad, elevations_rad, labels):
-    ax.text(_az, _el, label, fontsize=9, fontweight='bold', ha='center', va='center', color='black')
-
-ax.set_xticklabels(['150°L','120°L','90°L','60°L','30°L','0°','30°R','60°R','90°R','120°R','150°R'])
-ax.set_title("Mollweide Projection  (left speaker = left side)", fontsize=10, pad=15)
+# Cut the map off below the lowest loudspeaker: an empty lower hemisphere
+# only wastes space. The same cut is used for the energy plot further down.
+_map_floor = hammer.lat_floor(elevations)
+fig2 = hammer.layout_figure(azimuths, elevations, labels, floor_deg=_map_floor)
 
 col_3d, col_moll = st.columns(2)
 with col_3d:
@@ -439,8 +429,14 @@ with col_3d:
     )
     st.plotly_chart(fig, use_container_width=True)
 with col_moll:
-    st.subheader("🌍 Mollweide Projection")
-    st.pyplot(fig2)
+    st.subheader("🌍 Hammer-Aitoff Projection")
+    st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+    st.caption(
+        "Equal-area projection as used by the IEM AllRADecoder — 0° azimuth in the "
+        "centre, left loudspeakers on the left."
+        + ("" if _map_floor <= -90 else
+           f" The map is cut off at {_map_floor:.0f}° elevation as no loudspeakers are placed below.")
+    )
 
 # --- Expandable section: Loudspeaker Coordinates ---
 with st.expander("📍 Show Loudspeaker Coordinates (Channel, Azimuth, Elevation, x, y, z)"):
@@ -1229,36 +1225,13 @@ if _dec_valid:
     )
 
     _e_az, _e_el, _e_lvl, _e_mean = _dec["az"], _dec["el"], _dec["lvl"], _dec["mean"]
-    # Plot longitude = −azimuth so the left side of the layout appears on the left;
-    # flip along the azimuth axis to keep the mesh coordinates monotonically increasing.
-    _lon = np.radians(-_e_az)[:, ::-1]
-    _lat = np.radians(_e_el)[:, ::-1]
-    _lvlp = _e_lvl[:, ::-1]
-
-    _energy_cmap = LinearSegmentedColormap.from_list(
-        "energy", ["#000000", "#4d0000", "#a30000", "#ff2b2b", "#ff9d9d"])
-
-    fig_energy, ax_e = plt.subplots(figsize=(7, 4), subplot_kw={"projection": "mollweide"})
-    ax_e.set_facecolor("black")
-    _pcm = ax_e.pcolormesh(_lon, _lat, _lvlp, cmap=_energy_cmap,
-                           vmin=_e_mean - 1.5, vmax=_e_mean + 1.5, shading="gouraud")
-    ax_e.grid(True, linestyle="--", linewidth=0.4, color="#888888", alpha=0.6)
-    ax_e.scatter(-azimuths_rad, elevations_rad, s=16,
-                 facecolors="none", edgecolors="#00e5ff", linewidths=1.2)
-    for _az, _el, _label in zip(-azimuths_rad, elevations_rad, labels):
-        ax_e.text(_az, _el, _label, fontsize=8, fontweight="bold",
-                  ha="center", va="center", color="white")
-    ax_e.set_xticklabels(['150°L', '120°L', '90°L', '60°L', '30°L', '0°',
-                          '30°R', '60°R', '90°R', '120°R', '150°R'], fontsize=8)
-    ax_e.tick_params(colors="#444444")
-    ax_e.set_title("Energy Distribution  (left speaker = left side)", fontsize=10, pad=15)
-    _cbar = fig_energy.colorbar(_pcm, ax=ax_e, fraction=0.025, pad=0.04)
-    _cbar.set_label("energy relative to mean (dB)", fontsize=8)
-    _cbar.ax.tick_params(labelsize=7)
+    fig_energy = hammer.energy_figure(_e_lvl, _e_mean, azimuths, elevations, labels,
+                                      floor_deg=_map_floor)
 
     _ecol1, _ecol2 = st.columns([3, 2])
     with _ecol1:
-        st.pyplot(fig_energy)
+        st.plotly_chart(fig_energy, use_container_width=True, config={"displayModeBar": False})
+        st.caption("Decoded energy on the Hammer-Aitoff map, colour range ±1.5 dB around the mean.")
     with _ecol2:
         # Report the fluctuation over the region the loudspeakers actually cover
         # — the upper hemisphere, extended down to the lowest ring if one sits

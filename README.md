@@ -12,7 +12,7 @@ A Streamlit app to design and visualise loudspeaker layouts for ambisonic dome s
 - **Dome radius scaling** — set the physical dome radius in metres
 - **Listener height** — global reference height used by both the truss and wall planners
 - **3D sphere visualisation** — interactive Plotly view with correct ambisonics axis orientation (x = front, y = left, z = up)
-- **Mollweide projection** — 2D overview with left/right labelled correctly
+- **Hammer-Aitoff projection** — 2D overview in the same equal-area projection as the IEM AllRADecoder, left/right labelled correctly; the unused lower hemisphere is cut off to save space
 - **Loudspeaker coordinates table** — channel, azimuth, elevation, and Cartesian coordinates (x, y, z)
 - **IEM AllRADecoder JSON export** — download a layout file ready to import into the [IEM AllRADecoder plugin](https://plugins.iem.at)
 - **URL-based config sharing** — encode the full configuration in a shareable URL via base64 query parameter
