@@ -164,3 +164,4 @@ cython_debug/
 #.idea/
 # Claude Code personal settings
 .claude/settings.local.json
+.DS_Store
