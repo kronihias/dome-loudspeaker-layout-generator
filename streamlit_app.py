@@ -6,7 +6,9 @@ import json
 import base64
 import re
 import hashlib
+import urllib.parse
 from datetime import datetime
+import requests
 import allrad
 import hammer
 import layout_tools
@@ -1423,7 +1425,35 @@ if st.button("🔗 Generate Share Link"):
     }
     _encoded = base64.b64encode(json.dumps(_cfg).encode()).decode()
     st.query_params["cfg"] = _encoded
-    st.success("URL updated — copy it from your browser's address bar to share this configuration.")
+    st.success("URL updated — copy it from your browser's address bar or from the box below.")
+
+if "cfg" in st.query_params:
+    # Rebuild the full share URL server-side so it can be displayed and shortened.
+    _page_url = getattr(st.context, "url", None) or "https://dome-loudspeaker-layout-generator.streamlit.app/"
+    _u = urllib.parse.urlsplit(_page_url)
+    _long_url = (urllib.parse.urlunsplit((_u.scheme, _u.netloc, _u.path or "/", "", ""))
+                 + "?cfg=" + urllib.parse.quote(st.query_params["cfg"], safe=""))
+    st.code(_long_url, language=None)
+
+    _short_key = "_short_" + hashlib.sha1(_long_url.encode()).hexdigest()
+    if st.button("✂️ Shorten with TinyURL",
+                 help="Creates a short redirect via the free TinyURL service. "
+                      "The full link above keeps working on its own."):
+        if _short_key not in st.session_state:
+            try:
+                _resp = requests.get("https://tinyurl.com/api-create.php",
+                                     params={"url": _long_url}, timeout=6)
+                if _resp.ok and _resp.text.strip().startswith("http"):
+                    st.session_state[_short_key] = _resp.text.strip()
+                else:
+                    st.warning(f"TinyURL did not return a link (HTTP {_resp.status_code}). "
+                               "The full link above still works.")
+            except requests.RequestException as _exc:
+                st.warning(f"Could not reach TinyURL ({_exc.__class__.__name__}). "
+                           "The full link above still works.")
+    if _short_key in st.session_state:
+        st.code(st.session_state[_short_key], language=None)
+        st.caption("Short link via TinyURL — it redirects to the full link above.")
 
 st.markdown("---")
 st.markdown("© 2025–2026 Matthias Kronlachner")
