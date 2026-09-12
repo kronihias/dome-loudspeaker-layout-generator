@@ -9,6 +9,7 @@ import hashlib
 from datetime import datetime
 import allrad
 import hammer
+import layout_tools
 
 # --- Load config from URL (must run before any widgets) ---
 _url_cfg = None
@@ -135,6 +136,17 @@ r = dome_radius
 stagger_offset = 0 if Ring_below_horizon else 1
 cfg_key = f"N{N_points}_R{N_rings}_VoG{int(Voice_of_God)}_RBH{int(Ring_below_horizon)}_r{dome_radius}"
 
+# Apply an optimized layout requested on the previous run. This must happen
+# before the ring widgets below are instantiated (Streamlit forbids writing a
+# widget's session_state once the widget exists this run).
+_pending_opt = st.session_state.pop("_pending_optimized", None)
+if _pending_opt and _pending_opt.get("cfg_key") == cfg_key:
+    for _i, (_el, _ct, _off) in enumerate(zip(
+            _pending_opt["elevations"], _pending_opt["counts"], _pending_opt["offsets"])):
+        st.session_state[f"elev_{_i}_{cfg_key}"] = float(_el)
+        st.session_state[f"count_{_i}_{cfg_key}"] = int(_ct)
+        st.session_state[f"az_offset_{_i}_{cfg_key}"] = float(_off)
+
 _n_rings_total = len(default_theta_vals)
 for _row_start in range(0, _n_rings_total, 5):
     _row_count = min(5, _n_rings_total - _row_start)
@@ -205,6 +217,67 @@ def compute_ring_channels(counts, thetas, cw):
 
 
 ring_channels = compute_ring_channels(ring_point_counts, theta_vals, clockwise)
+
+# --- Ring elevation optimizer ---
+with st.expander("🔧 Optimize Ring Elevations"):
+    st.caption(
+        "Search ring elevations that flatten the energy distribution and maximise "
+        "the energy vector rE for a chosen ambisonic order. Speaker counts follow "
+        "from the elevations (Voice of God stays at 90°). Review the result and "
+        "apply it to the ring configuration above."
+    )
+    _cur_els = [round(90 - np.degrees(t), 2) for t in theta_vals]
+    _oc1, _oc2, _oc3 = st.columns(3)
+    _opt_order = _oc1.selectbox(
+        "Optimize for order", list(range(1, allrad.MAX_ORDER + 1)),
+        index=int(st.session_state.get("w_dec_order", 5)) - 1, key="w_opt_order",
+        format_func=lambda o: f"{o}th order")
+    _opt_weights = _oc2.selectbox("Weights", ["maxrE", "inPhase", "none"], key="w_opt_weights")
+    _opt_minel = _oc3.number_input(
+        "Lowest ring elevation (°)", min_value=-60.0, max_value=80.0,
+        value=float(min(_cur_els)), step=5.0, key=f"opt_minel_{cfg_key}")
+
+    if st.button("🚀 Run optimization"):
+        with st.spinner("Searching ring elevations…"):
+            _opt = layout_tools.optimize_rings(
+                int(N_points), len(theta_vals), bool(Voice_of_God), float(_opt_minel),
+                int(_opt_order), _opt_weights, ring_below_horizon=bool(Ring_below_horizon))
+        _opt.update({"cfg_key": cfg_key, "order": int(_opt_order),
+                     "weights": _opt_weights, "min_el": float(_opt_minel)})
+        st.session_state["_opt_result"] = _opt
+
+    _opt = st.session_state.get("_opt_result")
+    if _opt and _opt.get("cfg_key") == cfg_key:
+        import pandas as pd
+        # Fair before/after: score the CURRENT layout with the same surrogate.
+        _cur_dirs = layout_tools.speaker_dirs(_cur_els, ring_point_counts, azimuth_offsets)
+        if len(_cur_dirs) >= 4:
+            _cur_q = layout_tools.analyze_layout(
+                _cur_dirs, _opt["order"], _opt["weights"], _opt["min_el"])
+        else:
+            _cur_q = _opt["before"]
+        _a = _opt["after"]
+        st.dataframe(pd.DataFrame({
+            "Metric": ["Energy fluctuation (dB)", "rE (mean)", "Localisation err max (°)"],
+            "Current": [f"{_cur_q['energy_pp_db']:.2f}", f"{_cur_q['rE_mean']:.3f}",
+                        f"{_cur_q['err_max_deg']:.1f}"],
+            "Optimized": [f"{_a['energy_pp_db']:.2f}", f"{_a['rE_mean']:.3f}",
+                          f"{_a['err_max_deg']:.1f}"],
+        }), use_container_width=True, hide_index=True)
+        st.caption("Surrogate metrics (max-rE sampling decoder). Calculate the "
+                   "decoder after applying for the exact AllRAD figures.")
+        st.write("**Suggested rings** (elevation° × speakers):  " +
+                 ",  ".join(f"{e:g}° × {c}" for e, c in zip(_opt["elevations"], _opt["counts"])))
+        if st.button("✅ Apply optimized layout"):
+            # Defer the write to the next run, before the ring widgets exist.
+            st.session_state["_pending_optimized"] = {
+                "cfg_key": cfg_key,
+                "elevations": _opt["elevations"],
+                "counts": _opt["counts"],
+                "offsets": _opt["offsets"],
+            }
+            st.session_state.pop("_opt_result", None)
+            st.rerun()
 
 # --- Core logic ---
 spherical_coords = []
@@ -1194,9 +1267,12 @@ with _dcol3:
 
 if _calc_decoder:
     try:
+        _real_els = [s["Elevation"] for s in spherical_coords if not s["IsImaginary"]]
+        _dec_min_el = float(min(_real_els)) if _real_els else 0.0
         with st.spinner("Calculating AllRAD decoder…"):
             _res = allrad.calculate_allrad(spherical_coords, _dec_order, _dec_weights)
             _e_az, _e_el, _e_lvl, _e_mean = allrad.energy_distribution(_res)
+            _quality = layout_tools.analyze_decoder(_res, _dec_min_el)
         st.session_state["_decoder"] = {
             "sig": _cur_layout_sig,
             "order": int(_dec_order),
@@ -1205,6 +1281,7 @@ if _calc_decoder:
             "n_real": int(_res.matrix.shape[0]),
             "n_coeffs": int(_res.matrix.shape[1]),
             "az": _e_az, "el": _e_el, "lvl": _e_lvl, "mean": _e_mean,
+            "quality": _quality, "min_el": _dec_min_el,
         }
         st.success("**Decoder created** — the decoder was calculated successfully.")
     except Exception as _exc:  # noqa: BLE001
@@ -1246,6 +1323,33 @@ if _dec_valid:
             "Lower is better — fluctuations grow when the chosen order is too high "
             "for the number of loudspeakers. The roll-off below the lowest ring "
             "(no loudspeakers there) is excluded."
+        )
+
+    # --- Layout quality metrics ---
+    _q = _dec.get("quality")
+    if _q:
+        st.markdown("**📊 Layout Quality** — over the covered region "
+                    f"(elevation ≥ {_dec.get('min_el', 0.0):.0f}°)")
+        _qc = st.columns(4)
+        _qc[0].metric("Energy vector rE (mean)", f"{_q['rE_mean']:.3f}",
+                      help="Localisation sharpness of the decoded field (0–1). "
+                           "Higher and more uniform is better; ≈1 means tight, "
+                           "stable phantom sources.")
+        _qc[1].metric("Source spread (mean)", f"{_q['rE_spread_deg']:.0f}°",
+                      help="Apparent width of a phantom source, 2·arccos(rE). "
+                           "Smaller = more focused. Grows if the order is low for "
+                           "the number of loudspeakers.")
+        _qc[2].metric("Localisation error (max)", f"{_q['err_max_deg']:.1f}°",
+                      help="Largest angle between the intended direction and the "
+                           "rE direction. Should stay within a few degrees.")
+        _qc[3].metric("Decoder condition number", f"{_q['condition_number']:.1f}",
+                      help="Numerical robustness of the decoder matrix (σmax/σmin). "
+                           "Lower is better; large values mean some ambisonic "
+                           "components are decoded much louder than others.")
+        st.caption(
+            f"Minimum loudspeaker spacing: {_q['min_spacing_deg']:.0f}°. "
+            f"rE ranges {_q['rE_min']:.3f}–{_q['rE_mean']:.3f}; "
+            f"mean localisation error {_q['err_mean_deg']:.1f}°."
         )
 
 
