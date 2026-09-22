@@ -13,12 +13,13 @@ first, then upwards, with an optional below-horizon ring last (the app's own
 scheme); otherwise the remapping is printed as a warning.
 """
 import argparse
-import base64
 import json
 import sys
 import urllib.parse
 
 import numpy as np
+
+import share_link
 
 APP_URL = "https://dome-loudspeaker-layout-generator.streamlit.app/"
 
@@ -135,8 +136,7 @@ def convert(spk, title="", desc="", ring_tol=3.0, radius=None, listener_height=1
 
 
 def make_link(cfg, app=APP_URL):
-    enc = base64.b64encode(json.dumps(cfg).encode()).decode()
-    return app + "?cfg=" + urllib.parse.quote(enc, safe="")
+    return app + "?cfg=" + urllib.parse.quote(share_link.encode_cfg(cfg), safe="")
 
 
 def load_speakers(path):

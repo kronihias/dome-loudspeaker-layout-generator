@@ -15,7 +15,7 @@ A Streamlit app to design and visualise loudspeaker layouts for ambisonic dome s
 - **Hammer-Aitoff projection** — 2D overview in the same equal-area projection as the IEM AllRADecoder, left/right labelled correctly; the unused lower hemisphere is cut off to save space
 - **Loudspeaker coordinates table** — channel, azimuth, elevation, and Cartesian coordinates (x, y, z)
 - **IEM AllRADecoder JSON export** — download a layout file ready to import into the [IEM AllRADecoder plugin](https://plugins.iem.at)
-- **URL-based config sharing** — encode the full configuration in a shareable URL via base64 query parameter, with an optional TinyURL short link
+- **URL-based config sharing** — encode the full configuration in a shareable URL (zlib-compressed, URL-safe base64 query parameter), with an optional TinyURL short link when a `TINYURL_TOKEN` is set in the app's Streamlit secrets
 - **Import an existing layout** — `iem_json_to_link.py` turns an IEM AllRADecoder JSON into a share link (see below)
 - **🏗️ Truss Planner** — configure a per-ring rectangular truss (width, depth, height); speakers are projected outward onto the truss while preserving azimuth; view 3D projection and an elevation-change table with heights above floor
 - **🏠 Wall Mount Planner** — provide room dimensions (width, length, height) and project speakers onto the nearest wall, ceiling, or floor surface; 3D room visualisation with mount positions and a table of mounting coordinates per channel

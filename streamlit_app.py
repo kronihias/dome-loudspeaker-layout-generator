@@ -3,7 +3,6 @@ st.set_page_config(page_title="Dome Loudspeaker Layout Generator", page_icon="�
 import numpy as np
 import plotly.graph_objects as go
 import json
-import base64
 import re
 import hashlib
 import urllib.parse
@@ -12,12 +11,13 @@ import requests
 import allrad
 import hammer
 import layout_tools
+import share_link
 
 # --- Load config from URL (must run before any widgets) ---
 _url_cfg = None
 if "cfg" in st.query_params:
     try:
-        _url_cfg = json.loads(base64.b64decode(st.query_params["cfg"]).decode())
+        _url_cfg = share_link.decode_cfg(st.query_params["cfg"])
     except Exception:
         st.warning("Invalid share link — using defaults.")
 
@@ -1423,8 +1423,7 @@ if st.button("🔗 Generate Share Link"):
         "truss_exp":   int(st.session_state.get("truss_expander", False)),
         "wall_exp":    int(st.session_state.get("wall_expander",  False)),
     }
-    _encoded = base64.b64encode(json.dumps(_cfg).encode()).decode()
-    st.query_params["cfg"] = _encoded
+    st.query_params["cfg"] = share_link.encode_cfg(_cfg)
     st.success("URL updated — copy it from your browser's address bar or from the box below.")
 
 if "cfg" in st.query_params:
@@ -1435,20 +1434,29 @@ if "cfg" in st.query_params:
                  + "?cfg=" + urllib.parse.quote(st.query_params["cfg"], safe=""))
     st.code(_long_url, language=None)
 
+    # TinyURL's keyless api-create.php endpoint is deprecated: its links end up
+    # behind an ad interstitial. The supported API needs a token, so the button
+    # only appears when TINYURL_TOKEN is set in the app's secrets.
+    try:
+        _tinyurl_token = st.secrets.get("TINYURL_TOKEN")
+    except Exception:  # no secrets.toml at all
+        _tinyurl_token = None
     _short_key = "_short_" + hashlib.sha1(_long_url.encode()).hexdigest()
-    if st.button("✂️ Shorten with TinyURL",
-                 help="Creates a short redirect via the free TinyURL service. "
-                      "The full link above keeps working on its own."):
+    if _tinyurl_token and st.button("✂️ Shorten with TinyURL",
+                                    help="Creates a short redirect via TinyURL. "
+                                         "The full link above keeps working on its own."):
         if _short_key not in st.session_state:
             try:
-                _resp = requests.get("https://tinyurl.com/api-create.php",
-                                     params={"url": _long_url}, timeout=6)
-                if _resp.ok and _resp.text.strip().startswith("http"):
-                    st.session_state[_short_key] = _resp.text.strip()
+                _resp = requests.post("https://api.tinyurl.com/create",
+                                      headers={"Authorization": f"Bearer {_tinyurl_token}"},
+                                      json={"url": _long_url}, timeout=6)
+                _tiny = _resp.json().get("data", {}).get("tiny_url") if _resp.ok else None
+                if _tiny:
+                    st.session_state[_short_key] = _tiny
                 else:
                     st.warning(f"TinyURL did not return a link (HTTP {_resp.status_code}). "
                                "The full link above still works.")
-            except requests.RequestException as _exc:
+            except (requests.RequestException, ValueError) as _exc:
                 st.warning(f"Could not reach TinyURL ({_exc.__class__.__name__}). "
                            "The full link above still works.")
     if _short_key in st.session_state:
